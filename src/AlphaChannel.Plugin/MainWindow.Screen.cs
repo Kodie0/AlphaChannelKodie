@@ -10,11 +10,6 @@ internal sealed partial class MainWindow
     private void DrawScreenControls()
     {
         var engine = screenController.Engine;
-        ImGui.Text("Screen");
-        if (ImGui.Button("Recenter"))
-        {
-            engine.RecenterScreen();
-        }
 
         var position = engine.ScreenPosition;
         var yaw = engine.ScreenYaw;
@@ -28,10 +23,20 @@ internal sealed partial class MainWindow
             engine.SetScreenTransform(position, yaw, scale);
         }
 
+        if (ImGui.Button("Recenter in front of me"))
+        {
+            engine.RecenterScreen();
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        SectionHeader("Presets");
+
         ImGui.SetNextItemWidth(-70f);
         ImGui.InputTextWithHint("##presetName", "Preset name", ref presetNameInput, 32);
         ImGui.SameLine();
-        if (ImGui.Button("Save") && presetNameInput.Length > 0)
+        if (ImGui.Button("Save current") && presetNameInput.Length > 0)
         {
             Plugin.Cfg.ScreenPresets.Add(new ScreenPositionPreset
             {
@@ -44,6 +49,12 @@ internal sealed partial class MainWindow
             });
             Plugin.Cfg.Save();
             presetNameInput = string.Empty;
+        }
+
+        if (Plugin.Cfg.ScreenPresets.Count == 0)
+        {
+            ImGui.TextDisabled("No presets saved yet.");
+            return;
         }
 
         for (var index = 0; index < Plugin.Cfg.ScreenPresets.Count; index++)

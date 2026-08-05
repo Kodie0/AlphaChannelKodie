@@ -32,12 +32,14 @@ internal sealed partial class MainWindow
 
         if (ImGui.BeginTabItem("YouTube"))
         {
+            ImGui.Spacing();
             DrawYouTubeSearch();
             ImGui.EndTabItem();
         }
 
         if (ImGui.BeginTabItem("Twitch"))
         {
+            ImGui.Spacing();
             DrawTwitchCheck();
             ImGui.EndTabItem();
         }
@@ -47,9 +49,6 @@ internal sealed partial class MainWindow
 
     private void DrawYouTubeSearch()
     {
-        DrawCookiesSettings();
-        ImGui.Separator();
-
         ImGui.SetNextItemWidth(-40f);
         var submitted = ImGui.InputTextWithHint("##search", "Search query", ref searchQuery, 200,
             ImGuiInputTextFlags.EnterReturnsTrue);
@@ -66,10 +65,26 @@ internal sealed partial class MainWindow
             ImGui.TextDisabled("Searching...");
         }
 
-        if (searchResults is not { } results)
+        // Tucked away below the search box, collapsed by default - this is a one-time setup step
+        // for a minority of videos, not the primary thing this tab is for, and shouldn't compete
+        // with the search box for attention every time the tab opens.
+        ImGui.Spacing();
+        if (ImGui.CollapsingHeader("Age-restricted video settings"))
+        {
+            ImGui.Indent();
+            DrawCookiesSettings();
+            ImGui.Unindent();
+        }
+
+        if (searchResults is not { } results || results.Count == 0)
         {
             return;
         }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        SectionHeader($"Results ({results.Count})");
 
         for (var index = 0; index < results.Count; index++)
         {
@@ -106,6 +121,11 @@ internal sealed partial class MainWindow
                     result.ThumbnailUrl));
             }
 
+            if (index < results.Count - 1)
+            {
+                ImGui.Separator();
+            }
+
             ImGui.PopID();
         }
     }
@@ -121,7 +141,7 @@ internal sealed partial class MainWindow
     // on why this isn't something the plugin generates or transmits.
     private void DrawCookiesSettings()
     {
-        ImGui.TextDisabled("Age-restricted videos need a YouTube login (cookies.txt).");
+        ImGui.TextWrapped("Age-restricted videos need a YouTube login (cookies.txt).");
         if (ImGui.Button("Open YouTube to sign in"))
         {
             try
@@ -134,6 +154,8 @@ internal sealed partial class MainWindow
             }
         }
 
+        ImGui.Spacing();
+
         var useFirefox = Plugin.Cfg.UseFirefoxCookies;
         if (ImGui.Checkbox("Read cookies from Firefox automatically", ref useFirefox))
         {
@@ -142,8 +164,10 @@ internal sealed partial class MainWindow
             video.UseFirefoxCookies = useFirefox;
         }
 
-        ImGui.TextDisabled("Best-effort - needs an actual logged-in Firefox session. Falls back to the path below if it can't find one.");
+        ImGui.TextDisabled("Best-effort - needs an actual logged-in Firefox session.");
+        ImGui.TextDisabled("Falls back to the path below if it can't find one.");
 
+        ImGui.Spacing();
         ImGui.SetNextItemWidth(-70f);
         ImGui.InputTextWithHint("##cookiesPath", "Path to cookies.txt", ref cookiesPathInput, 260);
         ImGui.SameLine();
@@ -222,6 +246,8 @@ internal sealed partial class MainWindow
             _ = RunTwitchCheckAsync(twitchChannelInput.Trim());
         }
 
+        ImGui.TextDisabled("Not a search - checks whether one named channel is live right now.");
+
         if (isCheckingTwitch)
         {
             ImGui.TextDisabled("Checking...");
@@ -236,6 +262,10 @@ internal sealed partial class MainWindow
         {
             return;
         }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
 
         var thumbnail = thumbnails.Get(stream.ThumbnailUrl);
         if (thumbnail is not null)

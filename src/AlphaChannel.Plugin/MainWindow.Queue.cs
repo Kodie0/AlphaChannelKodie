@@ -1,5 +1,6 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Utility.Raii;
 
 namespace AlphaChannel.Plugin;
 
@@ -9,7 +10,20 @@ internal sealed partial class MainWindow
 
     private void DrawQueue()
     {
-        ImGui.Text("Queue");
+        if (queue.Entries.Count == 0)
+        {
+            ImGui.TextDisabled("Nothing queued.");
+            return;
+        }
+
+        // Bordered, height-capped region instead of letting a long queue push the whole window
+        // taller indefinitely - scrolls internally past ~4-5 entries.
+        using var child = ImRaii.Child("##queueList", new Vector2(-1, 160), true);
+        if (!child)
+        {
+            return;
+        }
+
         for (var index = 0; index < queue.Entries.Count; index++)
         {
             var entry = queue.Entries[index];
@@ -48,6 +62,11 @@ internal sealed partial class MainWindow
             if (IconButton(FontAwesomeIcon.Trash))
             {
                 queue.Remove(entry);
+            }
+
+            if (index < queue.Entries.Count - 1)
+            {
+                ImGui.Separator();
             }
 
             ImGui.PopID();

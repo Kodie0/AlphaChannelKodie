@@ -23,26 +23,38 @@ a display name (defaults to your character name).
 ## Using it
 
 - `/achannel` opens the window.
-- Paste a video URL (or search YouTube right from the window) and hit Play now.
+- Paste a video URL (or search YouTube, or check whether a Twitch channel is live, right from the
+  Discover tab) and hit Play now.
+- Age-restricted YouTube videos need a signed-in cookie - see "Age-restricted video settings" on
+  the Discover tab (can read straight from a logged-in Firefox session, or point it at a
+  `cookies.txt` you exported yourself).
 - Drag the screen into position with the Screen controls, save it as a named preset if you want to
-  reuse that spot later.
+  reuse that spot later. The power button next to playback controls fully closes the in-world
+  screen when you're done.
 - **Watch-along**: right-click a friend who's also running AlphaChannel and choose *Join Stream*,
   or type their in-plugin display name under Watch-along -> Join. Whoever's hosting can hand
   control to a viewer at any time ("Make host" next to their name in the roster), and can copy a
-  ready-made party-chat invite message with one click.
+  ready-made party-chat invite message with one click. You can rename yourself at any time from
+  the Rename button next to your connection status.
 - The video auto-pauses if the host enters combat or a cutscene, and resumes after.
-- Send quick emoji reactions during a watch-along from the Reactions row.
+- Send quick emoji reactions during a watch-along - they fly up across the in-world screen for
+  everyone watching, not just your own window.
+- The queue auto-plays: adding something to an empty queue starts it immediately.
 
 ## Features
 
-- In-world video screen (YouTube and most direct video URLs), with volume, seek, and a queue with
-  thumbnails you can reorder
-- In-plugin YouTube search
+- In-world video screen (YouTube, Twitch, and most direct video URLs), with volume, seek, and a
+  queue with thumbnails you can reorder
+- In-plugin YouTube search and Twitch live-channel check
+- Cookie-based sign-in for age-restricted YouTube videos
 - Real-time watch-along sync over a self-hosted relay - join by name, no accounts
-- See who's watching, and hand off hosting to another viewer
+- See who's watching, hand off hosting to another viewer, and rename yourself anytime
 - Auto-pause during combat/cutscenes
-- Emoji reactions
+- Emoji reactions that animate on the in-world screen itself
 - Saveable screen position presets
+
+If you'd like to support development, there's a Ko-fi link at the bottom of the plugin window
+(also at [ko-fi.com/alphachannel](https://ko-fi.com/alphachannel)).
 
 ## Self-hosting the relay
 

@@ -83,19 +83,60 @@ internal sealed partial class MainWindow : Window, IDisposable
         DrawNamePrompt();
         DrawConnectionStatus();
         ImGui.Separator();
-        DrawScreenControls();
-        ImGui.Separator();
-        DrawPlayback();
-        ImGui.Separator();
-        DrawQueue();
-        ImGui.Separator();
-        DrawSearch();
-        ImGui.Separator();
-        DrawWatchAlong();
-        ImGui.Separator();
-        DrawReactions();
-        ImGui.Separator();
+        ImGui.Spacing();
+
+        if (ImGui.BeginTabBar("##mainTabs"))
+        {
+            if (ImGui.BeginTabItem("Player"))
+            {
+                ImGui.Spacing();
+                DrawPlayback();
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+                SectionHeader("Queue");
+                DrawQueue();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Discover"))
+            {
+                ImGui.Spacing();
+                DrawSearch();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Screen"))
+            {
+                ImGui.Spacing();
+                DrawScreenControls();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Watch-along"))
+            {
+                ImGui.Spacing();
+                DrawWatchAlong();
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+                DrawReactions();
+                ImGui.EndTabItem();
+            }
+
+            ImGui.EndTabBar();
+        }
+
         DrawDonateButton();
+    }
+
+    // Consistent accent-colored sub-headers within a tab - plain white ImGui.Text for every
+    // section read as everything being the same visual weight, which was a good chunk of why the
+    // window felt "hammered on" rather than laid out.
+    private static void SectionHeader(string text)
+    {
+        ImGui.TextColored(Accent, text);
+        ImGui.Spacing();
     }
 
     private static readonly Vector4 KofiPink = new(0.98f, 0.29f, 0.55f, 1f);
@@ -160,22 +201,29 @@ internal sealed partial class MainWindow : Window, IDisposable
     {
         // The relay address is fixed (Configuration's default) and deliberately not exposed here -
         // players just connect, they don't need to know or be able to point it elsewhere.
-        ImGui.TextColored(stream.IsConnected ? Good : Danger, stream.IsConnected ? "Connected" : "Not connected");
-    }
+        var color = stream.IsConnected ? Good : Danger;
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            ImGui.TextColored(color, FontAwesomeIcon.Circle.ToIconString());
+        }
 
-    private void DrawWatchAlong()
-    {
-        ImGui.Text("Watch-along");
-        ImGui.TextDisabled($"Your name: {CurrentDisplayName ?? "..."}");
+        ImGui.SameLine();
+        ImGui.TextColored(color, stream.IsConnected ? "Connected" : "Not connected");
+        ImGui.SameLine();
+        ImGui.TextDisabled($" | {CurrentDisplayName ?? "..."}");
         ImGui.SameLine();
         if (ImGui.SmallButton("Rename"))
         {
             requestRename();
         }
+    }
 
+    private void DrawWatchAlong()
+    {
         switch (stream.Mode)
         {
             case StreamMode.Hosting:
+                SectionHeader("You're hosting");
                 if (ImGui.Button("Copy party invite"))
                 {
                     ImGui.SetClipboardText(
@@ -183,19 +231,23 @@ internal sealed partial class MainWindow : Window, IDisposable
                         $"(or open AlphaChannel and join \"{CurrentDisplayName}\").");
                 }
 
+                ImGui.Spacing();
                 DrawRoster($"Watching ({stream.Roster.Length})", allowPromote: true);
                 break;
 
             case StreamMode.Viewing:
+                SectionHeader("You're watching along");
                 if (ImGui.Button("Leave"))
                 {
                     _ = stream.LeaveAsync();
                 }
 
+                ImGui.Spacing();
                 DrawRoster($"Also watching ({stream.Roster.Length})", allowPromote: false);
                 break;
 
             default:
+                SectionHeader("Join a stream");
                 ImGui.SetNextItemWidth(-100f);
                 ImGui.InputTextWithHint("##hostName", "Host's name", ref joinHostNameInput, 32);
                 ImGui.SameLine();
@@ -216,7 +268,7 @@ internal sealed partial class MainWindow : Window, IDisposable
 
     private void DrawRoster(string label, bool allowPromote)
     {
-        ImGui.Text(label);
+        ImGui.TextDisabled(label);
         if (stream.Roster.Length == 0)
         {
             ImGui.TextDisabled("Nobody yet.");

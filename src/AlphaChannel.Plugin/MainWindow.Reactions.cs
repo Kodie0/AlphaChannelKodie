@@ -20,7 +20,7 @@ internal sealed partial class MainWindow
 
     private void DrawReactions()
     {
-        ImGui.Text("Reactions");
+        SectionHeader("Reactions");
         for (var index = 0; index < ReactionIcons.Length; index++)
         {
             if (index > 0)

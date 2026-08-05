@@ -17,35 +17,40 @@ internal sealed partial class MainWindow
 
     private void DrawPlayback()
     {
-        ImGui.Text("Playback");
-        ImGui.SetNextItemWidth(-70f);
-        var submittedUrl = ImGui.InputTextWithHint("##url", "Video URL", ref urlInput, 2000,
-            ImGuiInputTextFlags.EnterReturnsTrue);
-        ImGui.SameLine();
-        if (ImGui.Button("Paste"))
-        {
-            var clipboard = ImGui.GetClipboardText();
-            if (!string.IsNullOrWhiteSpace(clipboard))
-            {
-                urlInput = clipboard.Trim();
-            }
-        }
-
-        var playNowClicked = ImGui.Button("Play now");
-        if ((submittedUrl || playNowClicked) && urlInput.Length > 0)
-        {
-            queue.PlayNow(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
-            urlInput = string.Empty;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Add to queue") && urlInput.Length > 0)
-        {
-            queue.Add(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
-            urlInput = string.Empty;
-        }
-
         var (position, duration, isPaused) = video.GetProgress();
+
+        // Now-playing status first - the thing you actually glance at, above the controls that
+        // change it.
+        if (queue.Current is { } current)
+        {
+            ImGui.TextWrapped(current.Title);
+        }
+        else
+        {
+            ImGui.TextDisabled("Nothing playing.");
+        }
+
+        if (!seekDragging)
+        {
+            seekPreview = position;
+        }
+
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.SliderFloat("##seek", ref seekPreview, 0f, MathF.Max(duration, 0.01f), "");
+        seekDragging = ImGui.IsItemActive();
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            video.Seek(seekPreview);
+        }
+
+        ImGui.TextDisabled($"{FormatTime(position)} / {FormatTime(duration)}");
+
+        if (video.LastError is { } error)
+        {
+            ImGui.TextColored(Danger, error);
+        }
+
+        ImGui.Spacing();
 
         if (IconButton(isPaused ? FontAwesomeIcon.Play : FontAwesomeIcon.Pause))
         {
@@ -71,29 +76,36 @@ internal sealed partial class MainWindow
             queue.Clear();
         }
 
-        if (!seekDragging)
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        SectionHeader("Play something");
+
+        ImGui.SetNextItemWidth(-70f);
+        var submittedUrl = ImGui.InputTextWithHint("##url", "Video URL", ref urlInput, 2000,
+            ImGuiInputTextFlags.EnterReturnsTrue);
+        ImGui.SameLine();
+        if (ImGui.Button("Paste"))
         {
-            seekPreview = position;
+            var clipboard = ImGui.GetClipboardText();
+            if (!string.IsNullOrWhiteSpace(clipboard))
+            {
+                urlInput = clipboard.Trim();
+            }
         }
 
-        ImGui.SetNextItemWidth(-1f);
-        ImGui.SliderFloat("##seek", ref seekPreview, 0f, MathF.Max(duration, 0.01f), "");
-        seekDragging = ImGui.IsItemActive();
-        if (ImGui.IsItemDeactivatedAfterEdit())
+        var playNowClicked = ImGui.Button("Play now");
+        if ((submittedUrl || playNowClicked) && urlInput.Length > 0)
         {
-            video.Seek(seekPreview);
+            queue.PlayNow(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
+            urlInput = string.Empty;
         }
 
-        ImGui.TextDisabled($"{FormatTime(position)} / {FormatTime(duration)}");
-
-        if (video.LastError is { } error)
+        ImGui.SameLine();
+        if (ImGui.Button("Add to queue") && urlInput.Length > 0)
         {
-            ImGui.TextColored(Danger, error);
-        }
-
-        if (queue.Current is { } current)
-        {
-            ImGui.TextWrapped($"Now playing: {current.Title}");
+            queue.Add(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
+            urlInput = string.Empty;
         }
     }
 
