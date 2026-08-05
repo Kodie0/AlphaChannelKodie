@@ -38,6 +38,9 @@ internal sealed class Configuration : IPluginConfiguration
     public string UserId { get; set; } = Guid.NewGuid().ToString("N");
     public string RelayServerUrl { get; set; } = "https://alphachannel.duckdns.org";
 
+    public int Volume { get; set; } = 100;
+    public bool Muted { get; set; }
+
     // Keyed by IClientState.LocalContentId - the display name a player picked is tied to the FFXIV
     // character they were playing when they picked it, not to the Windows/plugin install, so an alt
     // gets its own prompt instead of inheriting the main character's name.

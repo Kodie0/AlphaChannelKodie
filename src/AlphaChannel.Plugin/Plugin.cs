@@ -20,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IGameInteropProvider InteropProvider { get; private set; } = null!;
     [PluginService] internal static INamePlateGui NamePlateGui { get; private set; } = null!;
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
+    [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     internal static Configuration Cfg { get; private set; } = null!;
@@ -47,6 +48,7 @@ public sealed class Plugin : IDalamudPlugin
         // Aetherphone ordering - no separate call needed here.
         screenController = new ScreenController(() => true);
         video = new VideoPlayer(screenController.Engine);
+        video.SetVolume(Cfg.Muted ? 0 : Cfg.Volume);
         queue = new AetherStreamQueue(video);
         stream = new StreamClient(Cfg, () => Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId()));
         stream.OnState += OnRemoteState;

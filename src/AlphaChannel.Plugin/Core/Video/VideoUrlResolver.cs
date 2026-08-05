@@ -6,6 +6,8 @@ namespace AlphaChannel.Plugin.Video;
 
 internal sealed record VideoMetadata(string Title, string Source, TimeSpan? Duration, string? ThumbnailUrl);
 
+internal sealed record VideoSearchEntry(string Title, string Url, string ChannelName, TimeSpan? Duration, string? ThumbnailUrl);
+
 internal sealed record ResolvedStream(string VideoUrl, string? AudioUrl, string QualityLabel);
 
 // Stage 4, deliberately NOT a port of AlphaChannel's yt-dlp path. AlphaChannel downloads a
@@ -97,5 +99,35 @@ internal sealed class VideoUrlResolver
             AepLog.Warning($"[Video] Failed to fetch metadata for {url}: {exception.Message}");
             return null;
         }
+    }
+
+    // YoutubeExplode's own search (scrapes YouTube's search results) - no API key needed, same
+    // dependency already used for playback resolution and metadata enrichment above.
+    public async Task<List<VideoSearchEntry>> SearchAsync(string query, int maxResults, CancellationToken token)
+    {
+        var results = new List<VideoSearchEntry>();
+        try
+        {
+            await foreach (var video in youtube.Search.GetVideosAsync(query, token).ConfigureAwait(false))
+            {
+                if (results.Count >= maxResults)
+                {
+                    break;
+                }
+
+                var thumbnail = video.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault();
+                results.Add(new VideoSearchEntry(video.Title, video.Url, video.Author.ChannelTitle, video.Duration,
+                    thumbnail?.Url));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning($"[Video] YouTube search failed for '{query}': {exception.Message}");
+        }
+
+        return results;
     }
 }

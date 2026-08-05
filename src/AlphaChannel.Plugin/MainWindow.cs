@@ -1,19 +1,31 @@
 using AlphaChannel.Plugin.Video;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 
 namespace AlphaChannel.Plugin;
 
-// Deliberately plain ImGui, not a port of Aetherphone's phone-styled Casting/Player/Queue tabs -
-// see the plan's note on why: that UI kit (Typography/Squircle/theme tokens) is a large surface
-// area purely for visual polish a functional single-window tool doesn't need for v1.
-internal sealed class MainWindow : Window, IDisposable
+// Split into partials by concern (MainWindow.Playback.cs, .Queue.cs, .Search.cs, .Screen.cs) -
+// this file just has the window skeleton, the name prompt, connection status, watch-along, and
+// the shared theme. A lightweight custom theme (this file's ThemeScope), not a port of
+// Aetherphone's Typography/Squircle kit - that's still too much surface area for this tool, but a
+// bare-default-gray ImGui window doesn't read as a real player either.
+internal sealed partial class MainWindow : Window, IDisposable
 {
+    private static readonly Vector4 Accent = new(0.42f, 0.45f, 0.95f, 1f);
+    private static readonly Vector4 AccentHover = new(0.52f, 0.56f, 1.00f, 1f);
+    private static readonly Vector4 AccentActive = new(0.32f, 0.35f, 0.82f, 1f);
+    private static readonly Vector4 FrameBg = new(0.14f, 0.14f, 0.19f, 1f);
+    private static readonly Vector4 FrameBgHover = new(0.20f, 0.20f, 0.28f, 1f);
+    private static readonly Vector4 Danger = new(0.95f, 0.35f, 0.35f, 1f);
+    private static readonly Vector4 Good = new(0.3f, 0.9f, 0.4f, 1f);
+
     private readonly ScreenController screenController;
     private readonly VideoPlayer video;
     private readonly AetherStreamQueue queue;
     private readonly StreamClient stream;
-    private string urlInput = string.Empty;
+    private readonly ThumbnailCache thumbnails = new();
     private string joinHostNameInput = string.Empty;
     private string? joinError;
 
@@ -37,7 +49,7 @@ internal sealed class MainWindow : Window, IDisposable
         this.stream = stream;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(360, 420),
+            MinimumSize = new Vector2(380, 460),
             MaximumSize = new Vector2(2000, 2000),
         };
 
@@ -63,6 +75,8 @@ internal sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        using var theme = new ThemeScope();
+
         DrawNamePrompt();
         DrawConnectionStatus();
         ImGui.Separator();
@@ -71,6 +85,8 @@ internal sealed class MainWindow : Window, IDisposable
         DrawPlayback();
         ImGui.Separator();
         DrawQueue();
+        ImGui.Separator();
+        DrawSearch();
         ImGui.Separator();
         DrawWatchAlong();
     }
@@ -105,100 +121,7 @@ internal sealed class MainWindow : Window, IDisposable
     {
         // The relay address is fixed (Configuration's default) and deliberately not exposed here -
         // players just connect, they don't need to know or be able to point it elsewhere.
-        ImGui.TextColored(stream.IsConnected ? new Vector4(0.3f, 0.9f, 0.4f, 1f) : new Vector4(0.9f, 0.4f, 0.3f, 1f),
-            stream.IsConnected ? "Connected" : "Not connected");
-    }
-
-    private void DrawScreenControls()
-    {
-        var engine = screenController.Engine;
-        ImGui.Text("Screen");
-        if (ImGui.Button("Recenter"))
-        {
-            engine.RecenterScreen();
-        }
-
-        var position = engine.ScreenPosition;
-        var yaw = engine.ScreenYaw;
-        var scale = engine.ScreenScale;
-        var changed = false;
-        changed |= ImGui.DragFloat3("Position", ref position, 0.05f);
-        changed |= ImGui.SliderAngle("Yaw", ref yaw);
-        changed |= ImGui.SliderFloat("Scale", ref scale, VideoEngine.MinScreenScale, VideoEngine.MaxScreenScale);
-        if (changed)
-        {
-            engine.SetScreenTransform(position, yaw, scale);
-        }
-    }
-
-    private void DrawPlayback()
-    {
-        ImGui.Text("Playback");
-        ImGui.SetNextItemWidth(-70f);
-        ImGui.InputTextWithHint("##url", "Video URL", ref urlInput, 2000);
-        ImGui.SameLine();
-        if (ImGui.Button("Paste"))
-        {
-            var clipboard = ImGui.GetClipboardText();
-            if (!string.IsNullOrWhiteSpace(clipboard))
-            {
-                urlInput = clipboard.Trim();
-            }
-        }
-
-        if (ImGui.Button("Play now") && urlInput.Length > 0)
-        {
-            queue.PlayNow(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
-            urlInput = string.Empty;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Add to queue") && urlInput.Length > 0)
-        {
-            queue.Add(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
-            urlInput = string.Empty;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Skip"))
-        {
-            queue.Advance();
-        }
-
-        ImGui.SameLine();
-        var isPaused = video.GetProgress().Paused;
-        if (ImGui.Button(isPaused ? "Resume" : "Pause"))
-        {
-            video.Pause(!isPaused);
-        }
-
-        if (video.LastError is { } error)
-        {
-            ImGui.TextColored(new Vector4(0.95f, 0.35f, 0.35f, 1f), error);
-        }
-
-        if (queue.Current is { } current)
-        {
-            ImGui.TextWrapped($"Now playing: {current.Title}");
-        }
-    }
-
-    private void DrawQueue()
-    {
-        ImGui.Text("Queue");
-        for (var index = 0; index < queue.Entries.Count; index++)
-        {
-            var entry = queue.Entries[index];
-            ImGui.PushID(index);
-            ImGui.TextWrapped(entry.Title);
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Remove"))
-            {
-                queue.Remove(entry);
-            }
-
-            ImGui.PopID();
-        }
+        ImGui.TextColored(stream.IsConnected ? Good : Danger, stream.IsConnected ? "Connected" : "Not connected");
     }
 
     private void DrawWatchAlong()
@@ -232,7 +155,7 @@ internal sealed class MainWindow : Window, IDisposable
 
                 if (joinError is { } error)
                 {
-                    ImGui.TextColored(new Vector4(0.95f, 0.35f, 0.35f, 1f), error);
+                    ImGui.TextColored(Danger, error);
                 }
 
                 break;
@@ -256,5 +179,39 @@ internal sealed class MainWindow : Window, IDisposable
 
     public void Dispose()
     {
+        thumbnails.Dispose();
+    }
+
+    // Shared by every partial that wants a play/pause/skip/volume-style glyph button instead of a
+    // text label - Dalamud bundles FontAwesome already, no extra font asset needed.
+    private static bool IconButton(FontAwesomeIcon icon)
+    {
+        using var iconFont = ImRaii.PushFont(UiBuilder.IconFont);
+        return ImGui.Button(icon.ToIconString());
+    }
+
+    private readonly struct ThemeScope : IDisposable
+    {
+        private const int ColorCount = 7;
+        private const int StyleCount = 2;
+
+        public ThemeScope()
+        {
+            ImGui.PushStyleColor(ImGuiCol.Button, Accent);
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, AccentHover);
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, AccentActive);
+            ImGui.PushStyleColor(ImGuiCol.FrameBg, FrameBg);
+            ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, FrameBgHover);
+            ImGui.PushStyleColor(ImGuiCol.SliderGrab, Accent);
+            ImGui.PushStyleColor(ImGuiCol.SliderGrabActive, AccentActive);
+            ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 4f);
+            ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, 4f);
+        }
+
+        public void Dispose()
+        {
+            ImGui.PopStyleVar(StyleCount);
+            ImGui.PopStyleColor(ColorCount);
+        }
     }
 }
