@@ -13,9 +13,9 @@ internal sealed class MainWindow : Window, IDisposable
     private readonly VideoPlayer video;
     private readonly AetherStreamQueue queue;
     private readonly StreamClient stream;
-    private readonly Configuration configuration;
     private string urlInput = string.Empty;
-    private string joinHostIdInput = string.Empty;
+    private string joinHostNameInput = string.Empty;
+    private string? joinError;
 
     private bool namePromptPending;
     private bool namePromptActive;
@@ -24,19 +24,25 @@ internal sealed class MainWindow : Window, IDisposable
 
     internal bool IsNamePromptActive => namePromptActive;
 
+    // Updated every tick from Plugin.cs (cheap dictionary lookup there) - shown here instead of the
+    // raw UserId so players never need to read each other an opaque GUID to join a stream.
+    internal string? CurrentDisplayName { get; set; }
+
     internal MainWindow(ScreenController screenController, VideoPlayer video, AetherStreamQueue queue,
-        StreamClient stream, Configuration configuration) : base("AlphaChannel###AlphaChannelMain")
+        StreamClient stream) : base("AlphaChannel###AlphaChannelMain")
     {
         this.screenController = screenController;
         this.video = video;
         this.queue = queue;
         this.stream = stream;
-        this.configuration = configuration;
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(360, 420),
             MaximumSize = new Vector2(2000, 2000),
         };
+
+        stream.OnJoined += () => joinError = null;
+        stream.OnDeclined += reason => joinError = string.IsNullOrEmpty(reason) ? "Could not find that host." : reason;
     }
 
     // Called from Plugin.cs once per character that hasn't picked a name yet, or after an admin
@@ -198,19 +204,24 @@ internal sealed class MainWindow : Window, IDisposable
     private void DrawWatchAlong()
     {
         ImGui.Text("Watch-along");
-        ImGui.TextDisabled($"Your ID: {configuration.UserId}");
+        ImGui.TextDisabled($"Your name: {CurrentDisplayName ?? "..."}");
         ImGui.SetNextItemWidth(-100f);
-        ImGui.InputTextWithHint("##hostId", "Host's ID", ref joinHostIdInput, 64);
+        ImGui.InputTextWithHint("##hostName", "Host's name", ref joinHostNameInput, 32);
         ImGui.SameLine();
-        if (ImGui.Button("Join") && joinHostIdInput.Length > 0)
+        if (ImGui.Button("Join") && joinHostNameInput.Length > 0)
         {
-            _ = stream.JoinAsync(joinHostIdInput.Trim());
+            _ = stream.JoinAsync(joinHostNameInput.Trim());
         }
 
         ImGui.SameLine();
         if (ImGui.Button("Leave"))
         {
             _ = stream.LeaveAsync();
+        }
+
+        if (joinError is { } error)
+        {
+            ImGui.TextColored(new Vector4(0.95f, 0.35f, 0.35f, 1f), error);
         }
 
         ImGui.Text($"Mode: {stream.Mode}");

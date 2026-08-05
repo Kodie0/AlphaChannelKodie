@@ -46,7 +46,7 @@ public sealed class Plugin : IDalamudPlugin
         stream.OnRenameRequired += OnRenameRequired;
         stream.Start();
 
-        mainWindow = new MainWindow(screenController, video, queue, stream, Cfg);
+        mainWindow = new MainWindow(screenController, video, queue, stream);
         windowSystem.AddWindow(mainWindow);
 
         Framework.Update += OnFrameworkUpdate;
@@ -67,6 +67,7 @@ public sealed class Plugin : IDalamudPlugin
         screenController.OnFrameworkUpdate();
         queue.OnFrameworkUpdate();
         EnsureCharacterHasName();
+        mainWindow.CurrentDisplayName = Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId());
 
         // Hosting: push the local queue's current state out to the relay every tick it changes
         // meaningfully - PublishStateAsync itself is cheap to call repeatedly (a JSON send), the

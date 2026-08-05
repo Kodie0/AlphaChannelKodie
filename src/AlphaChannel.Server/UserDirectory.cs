@@ -20,6 +20,26 @@ internal sealed class UserDirectory
 
     public string DisplayNameOrFallback(string userId) => displayNames.GetValueOrDefault(userId, userId);
 
+    // Lets a viewer join by typing the host's chosen name instead of their opaque UserId. O(n) scan
+    // over a handful of names is fine at this scale - see the plan's v1 auth note, this is a casual
+    // friend-group tool, not a namespace that needs to be unique at scale. If two connected people
+    // share a display name this returns whichever the dictionary enumerates first, which is a real
+    // but acceptable limitation for now (fixable by asking one of them to pick a different name).
+    public bool TryResolveUserId(string displayName, out string userId)
+    {
+        foreach (var pair in displayNames)
+        {
+            if (string.Equals(pair.Value, displayName, StringComparison.OrdinalIgnoreCase))
+            {
+                userId = pair.Key;
+                return true;
+            }
+        }
+
+        userId = string.Empty;
+        return false;
+    }
+
     // Returns the socket to push stream.renameRequired to, if the user is currently connected.
     public bool TryResetDisplayName(string userId, out WebSocket? socket)
     {

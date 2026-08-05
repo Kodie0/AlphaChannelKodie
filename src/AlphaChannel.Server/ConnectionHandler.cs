@@ -64,11 +64,20 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                         await BroadcastAsync(room, room.LastState, token).ConfigureAwait(false);
                         break;
 
-                    case SignalType.StreamJoin when message.HostId is { Length: > 0 } hostId:
-                        var target = rooms.GetOrCreateRoom(hostId);
+                    // message.HostId carries the host's typed display name here, not their real
+                    // UserId - players never see or type each other's UserId, see UserDirectory.
+                    case SignalType.StreamJoin when message.HostId is { Length: > 0 } hostName:
+                        if (!directory.TryResolveUserId(hostName, out var resolvedHostId))
+                        {
+                            await SendAsync(socket, new StreamControl { Type = SignalType.StreamDeclined, Reason = "Host not found." },
+                                token).ConfigureAwait(false);
+                            break;
+                        }
+
+                        var target = rooms.GetOrCreateRoom(resolvedHostId);
                         target.Viewers[userId] = socket;
-                        viewingHostId = hostId;
-                        await SendAsync(socket, new StreamControl { Type = SignalType.StreamJoined, HostId = hostId }, token)
+                        viewingHostId = resolvedHostId;
+                        await SendAsync(socket, new StreamControl { Type = SignalType.StreamJoined, HostId = resolvedHostId }, token)
                             .ConfigureAwait(false);
                         if (target.LastState is { } cached)
                         {

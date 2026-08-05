@@ -139,6 +139,13 @@ internal sealed class StreamClient : IDisposable
                 break;
             case SignalType.StreamJoined:
                 Mode = StreamMode.Viewing;
+                // Echoed back as the host's real UserId (JoinAsync sent their display name) - keep
+                // it, in case anything ever needs the resolved identity rather than the typed name.
+                if (message.HostId is { Length: > 0 } resolvedHostId)
+                {
+                    HostId = resolvedHostId;
+                }
+
                 OnJoined?.Invoke();
                 break;
             case SignalType.StreamDeclined:
