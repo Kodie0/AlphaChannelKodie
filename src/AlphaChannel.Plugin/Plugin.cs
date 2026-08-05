@@ -31,6 +31,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly StreamClient stream;
     private readonly MainWindow mainWindow;
 
+    // Written from the network thread (OnRemoteState), read/cleared on the main thread
+    // (OnFrameworkUpdate) - a plain reference field is fine here, a single pointer swap is already
+    // atomic in .NET and only the latest state ever matters, no torn reads to guard against.
+    private volatile AlphaChannel.Contracts.StreamControl? pendingRemoteState;
+
     public string Name => "AlphaChannel";
 
     public Plugin()
@@ -94,6 +99,12 @@ public sealed class Plugin : IDalamudPlugin
         EnsureCharacterHasName();
         mainWindow.CurrentDisplayName = Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId());
 
+        if (pendingRemoteState is { } remoteState)
+        {
+            pendingRemoteState = null;
+            ApplyRemoteState(remoteState);
+        }
+
         // Hosting: push the local queue's current state out to the relay every tick it changes
         // meaningfully - PublishStateAsync itself is cheap to call repeatedly (a JSON send), the
         // server is what dedupes/broadcasts, so no local diff-check is needed for a v1.
@@ -139,10 +150,16 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    // stream.OnState fires from StreamClient's WebSocket receive loop - a background thread, not
+    // the game's main thread. video.Play and the screen transform both touch main-thread-only game
+    // state (this is exactly what threw "Not on main thread!" when applied here directly), so this
+    // just records the latest message and OnFrameworkUpdate applies it on the next tick instead.
+    private void OnRemoteState(AlphaChannel.Contracts.StreamControl message) => pendingRemoteState = message;
+
     // A viewer's client receiving a host's stream.state - apply URL/position/pause and the
     // host's screen transform to this client's own local ScreenPainter, same "every client draws
     // its own copy" reasoning as VideoEngine.ApplyRemoteScreenTransform's own doc comment.
-    private void OnRemoteState(AlphaChannel.Contracts.StreamControl message)
+    private void ApplyRemoteState(AlphaChannel.Contracts.StreamControl message)
     {
         if (stream.Mode != StreamMode.Viewing || message.Url is not { Length: > 0 } url)
         {
