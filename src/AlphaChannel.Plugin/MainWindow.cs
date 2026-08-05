@@ -104,6 +104,15 @@ internal sealed partial class MainWindow : Window, IDisposable
 
     private void DrawDonateButton()
     {
+        // Pinned to the bottom of the window's visible area (when there's room left), not just
+        // wherever it happens to fall after the last section - kept visually separate from the
+        // rest of the controls above rather than reading as part of Reactions.
+        var targetY = ImGui.GetWindowSize().Y - ImGui.GetFrameHeightWithSpacing() - ImGui.GetStyle().WindowPadding.Y;
+        if (targetY > ImGui.GetCursorPosY())
+        {
+            ImGui.SetCursorPosY(targetY);
+        }
+
         using var color = ImRaii.PushColor(ImGuiCol.Button, KofiPink)
             .Push(ImGuiCol.ButtonHovered, KofiPinkHover)
             .Push(ImGuiCol.ButtonActive, KofiPinkActive);
