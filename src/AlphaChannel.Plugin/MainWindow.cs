@@ -89,6 +89,8 @@ internal sealed partial class MainWindow : Window, IDisposable
         DrawSearch();
         ImGui.Separator();
         DrawWatchAlong();
+        ImGui.Separator();
+        DrawReactions();
     }
 
     private void DrawNamePrompt()
@@ -132,7 +134,14 @@ internal sealed partial class MainWindow : Window, IDisposable
         switch (stream.Mode)
         {
             case StreamMode.Hosting:
-                DrawRoster($"Watching ({stream.Roster.Length})");
+                if (ImGui.Button("Copy party invite"))
+                {
+                    ImGui.SetClipboardText(
+                        $"Come watch with me! Right-click my character and choose \"Join Stream\" " +
+                        $"(or open AlphaChannel and join \"{CurrentDisplayName}\").");
+                }
+
+                DrawRoster($"Watching ({stream.Roster.Length})", allowPromote: true);
                 break;
 
             case StreamMode.Viewing:
@@ -141,7 +150,7 @@ internal sealed partial class MainWindow : Window, IDisposable
                     _ = stream.LeaveAsync();
                 }
 
-                DrawRoster($"Also watching ({stream.Roster.Length})");
+                DrawRoster($"Also watching ({stream.Roster.Length})", allowPromote: false);
                 break;
 
             default:
@@ -162,7 +171,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void DrawRoster(string label)
+    private void DrawRoster(string label, bool allowPromote)
     {
         ImGui.Text(label);
         if (stream.Roster.Length == 0)
@@ -173,7 +182,21 @@ internal sealed partial class MainWindow : Window, IDisposable
 
         for (var index = 0; index < stream.Roster.Length; index++)
         {
-            ImGui.BulletText(stream.Roster[index].DisplayName);
+            var participant = stream.Roster[index];
+            ImGui.BulletText(participant.DisplayName);
+            if (!allowPromote)
+            {
+                continue;
+            }
+
+            ImGui.SameLine();
+            ImGui.PushID(index);
+            if (ImGui.SmallButton("Make host"))
+            {
+                _ = stream.TransferHostAsync(participant.UserId);
+            }
+
+            ImGui.PopID();
         }
     }
 

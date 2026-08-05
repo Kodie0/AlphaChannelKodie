@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -33,6 +34,11 @@ internal sealed class StreamClient : IDisposable
     internal string? HostId { get; private set; }
     internal ParticipantInfo[] Roster { get; private set; } = [];
     internal bool IsConnected => socket?.State == WebSocketState.Open;
+
+    // Filled from Dispatch (a background thread) - drained by MainWindow's Draw (main thread) each
+    // frame, so this needs to be thread-safe for that handoff, same reasoning as everywhere else
+    // in this plugin that crosses from the receive loop back to the main thread.
+    internal ConcurrentQueue<(string SenderUserId, string Glyph)> IncomingReactions { get; } = new();
 
     internal event Action<StreamControl>? OnState;
     internal event Action? OnJoined;
@@ -164,6 +170,25 @@ internal sealed class StreamClient : IDisposable
             case SignalType.StreamRenameRequired:
                 OnRenameRequired?.Invoke();
                 break;
+
+            case SignalType.StreamHostTransferred:
+                if (message.HostId == configuration.UserId)
+                {
+                    Mode = StreamMode.Hosting;
+                    HostId = null;
+                }
+                else
+                {
+                    Mode = StreamMode.Viewing;
+                    HostId = message.HostId;
+                }
+
+                break;
+
+            case SignalType.StreamReaction when message.Reaction is { Length: > 0 } glyph &&
+                message.UserId is { Length: > 0 } senderId:
+                IncomingReactions.Enqueue((senderId, glyph));
+                break;
         }
     }
 
@@ -194,6 +219,14 @@ internal sealed class StreamClient : IDisposable
         HostId = hostId;
         return SendAsync(new StreamControl { Type = SignalType.StreamJoin, HostId = hostId });
     }
+
+    // targetUserId comes straight from Roster (ParticipantInfo.UserId) - the host already has real
+    // UserIds for everyone currently watching, no name lookup needed like JoinAsync's does.
+    internal Task TransferHostAsync(string targetUserId) =>
+        SendAsync(new StreamControl { Type = SignalType.StreamTransferHost, HostId = targetUserId });
+
+    internal Task SendReactionAsync(string glyph) =>
+        SendAsync(new StreamControl { Type = SignalType.StreamReaction, Reaction = glyph });
 
     internal async Task LeaveAsync()
     {

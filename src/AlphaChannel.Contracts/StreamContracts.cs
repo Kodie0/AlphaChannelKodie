@@ -21,6 +21,21 @@ public static class SignalType
     // Server -> client push telling this client its name was cleared by an admin reset and it needs
     // to prompt the player for a new one - see AlphaChannel.Server's /admin/reset-username.
     public const string StreamRenameRequired = "stream.renameRequired";
+
+    // Host -> server, naming (via HostId, carrying the target's real UserId here - the host already
+    // has real UserIds from their own roster) a current viewer to hand hosting duty to.
+    public const string StreamTransferHost = "stream.transferHost";
+
+    // Server -> everyone in the room (old host, new host, remaining viewers) once a transfer
+    // completes - HostId carries the new host's UserId. Each client compares that against its own
+    // UserId to work out whether it just became the host, was just demoted to viewer, or is
+    // unaffected but should update who it recognizes as host.
+    public const string StreamHostTransferred = "stream.hostTransferred";
+
+    // Viewer -> server -> broadcast to the whole room (including the sender, for simplicity - see
+    // the client-side note on why that's fine here). Reaction carries a short glyph/emoji, not a
+    // free-text field - this is a fun reaction burst, not a chat feature.
+    public const string StreamReaction = "stream.reaction";
 }
 
 // Same flat envelope shape as Aetherphone's CallControl, trimmed to only the fields the stream.*
@@ -34,6 +49,7 @@ public sealed record StreamControl
     public string? DisplayName { get; init; }
     public string? Reason { get; init; }
     public ParticipantInfo[]? Participants { get; init; }
+    public string? Reaction { get; init; }
 
     public string? Url { get; init; }
     public double? PositionSeconds { get; init; }

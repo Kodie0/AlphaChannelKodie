@@ -1,4 +1,5 @@
 using AlphaChannel.Plugin.Video;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Command;
 using Dalamud.Game.Gui.ContextMenu;
 using Dalamud.Game.Gui.NamePlate;
@@ -21,6 +22,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static INamePlateGui NamePlateGui { get; private set; } = null!;
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
+    [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     internal static Configuration Cfg { get; private set; } = null!;
@@ -36,6 +38,10 @@ public sealed class Plugin : IDalamudPlugin
     // (OnFrameworkUpdate) - a plain reference field is fine here, a single pointer swap is already
     // atomic in .NET and only the latest state ever matters, no torn reads to guard against.
     private volatile AlphaChannel.Contracts.StreamControl? pendingRemoteState;
+
+    // True only when WE paused playback because of combat/a cutscene, not when the host paused it
+    // manually - otherwise leaving combat would un-pause a video the host deliberately stopped.
+    private bool autoPaused;
 
     public string Name => "AlphaChannel";
 
@@ -107,15 +113,46 @@ public sealed class Plugin : IDalamudPlugin
             ApplyRemoteState(remoteState);
         }
 
+        ApplyAutoPause();
+
         // Hosting: push the local queue's current state out to the relay every tick it changes
         // meaningfully - PublishStateAsync itself is cheap to call repeatedly (a JSON send), the
-        // server is what dedupes/broadcasts, so no local diff-check is needed for a v1.
-        if (queue.Current is { } current && screenController.Engine.IsActive)
+        // server is what dedupes/broadcasts, so no local diff-check is needed for a v1. The Mode
+        // check matters now that stream.transferHost exists - without it, a host who was just
+        // transferred away from hosting (Mode flips to Viewing) would keep publishing their own
+        // stale local queue state and stomp on the new host's.
+        if (stream.Mode == StreamMode.Hosting && queue.Current is { } current && screenController.Engine.IsActive)
         {
             var (position, _, paused) = video.GetProgress();
             _ = stream.PublishStateAsync(current.Url, position, paused, screenController.Engine.ScreenPosition,
                 screenController.Engine.ScreenYaw, screenController.Engine.ScreenScale);
             video.SetOverlayTitle(current.Title, current.Source);
+        }
+    }
+
+    // Only touches playback while actually hosting - a viewer's playback is driven entirely by the
+    // host's own stream.state pushes, auto-pausing it locally too would just fight that.
+    private void ApplyAutoPause()
+    {
+        if (stream.Mode != StreamMode.Hosting)
+        {
+            autoPaused = false;
+            return;
+        }
+
+        var shouldPause = Condition[ConditionFlag.InCombat] || Condition[ConditionFlag.WatchingCutscene] ||
+            Condition[ConditionFlag.WatchingCutscene78];
+        var isPaused = video.GetProgress().Paused;
+
+        if (shouldPause && !isPaused)
+        {
+            video.Pause(true);
+            autoPaused = true;
+        }
+        else if (!shouldPause && autoPaused)
+        {
+            video.Pause(false);
+            autoPaused = false;
         }
     }
 

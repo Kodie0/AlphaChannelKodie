@@ -4,15 +4,15 @@ using AlphaChannel.Contracts;
 
 namespace AlphaChannel.Server;
 
-// One instance handles one socket's whole lifetime. hostingRoomId/viewingHostId are locals, not
-// fields, so this class itself is stateless and safe to register as a DI singleton - see the plan's
-// v1 auth note: userId here is just whatever the client's Authorization: Bearer header claims, no
-// verification against a real identity.
+// One instance handles one socket's whole lifetime. viewingHostId is a local, not a field, so this
+// class itself is stateless and safe to register as a DI singleton - see the plan's v1 auth note:
+// userId here is just whatever the client's Authorization: Bearer header claims, no verification
+// against a real identity. Room ownership itself (who's currently hosting) is NOT tracked in a
+// local anymore - see the finally block's comment for why a stream.transferHost made that unsafe.
 internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directory, ILogger<ConnectionHandler> logger)
 {
     public async Task RunAsync(WebSocket socket, string userId, CancellationToken token)
     {
-        string? hostingRoomId = null;
         string? viewingHostId = null;
         directory.Connected(userId, socket);
 
@@ -58,9 +58,10 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                         break;
 
                     case SignalType.StreamState:
-                        hostingRoomId = userId;
-                        var room = rooms.GetOrCreateRoom(userId);
-                        room.LastState = message with { HostId = userId };
+                        // FindRoomHostedBy first: if this user was transferred host of an existing
+                        // room, their state updates THAT room, not a brand new one keyed by them.
+                        var room = rooms.FindRoomHostedBy(userId) ?? rooms.GetOrCreateRoom(userId);
+                        room.LastState = message with { HostId = room.HostUserId };
                         await BroadcastAsync(room, room.LastState, token).ConfigureAwait(false);
                         break;
 
@@ -74,11 +75,11 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                             break;
                         }
 
-                        var target = rooms.GetOrCreateRoom(resolvedHostId);
+                        var target = rooms.FindRoomHostedBy(resolvedHostId) ?? rooms.GetOrCreateRoom(resolvedHostId);
                         target.Viewers[userId] = socket;
-                        viewingHostId = resolvedHostId;
-                        await SendAsync(socket, new StreamControl { Type = SignalType.StreamJoined, HostId = resolvedHostId }, token)
-                            .ConfigureAwait(false);
+                        viewingHostId = target.RoomKey;
+                        await SendAsync(socket, new StreamControl { Type = SignalType.StreamJoined, HostId = target.HostUserId },
+                            token).ConfigureAwait(false);
                         if (target.LastState is { } cached)
                         {
                             await SendAsync(socket, cached, token).ConfigureAwait(false);
@@ -88,11 +89,56 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                         break;
 
                     case SignalType.StreamLeave:
-                        if (viewingHostId is { } leaveHostId && rooms.GetRoom(leaveHostId) is { } leaveRoom)
+                        if (viewingHostId is { } leaveRoomKey && rooms.GetRoom(leaveRoomKey) is { } leaveRoom)
                         {
                             leaveRoom.Viewers.TryRemove(userId, out _);
                             viewingHostId = null;
                             await BroadcastRosterAsync(leaveRoom, token).ConfigureAwait(false);
+                        }
+
+                        break;
+
+                    // message.HostId carries the target viewer's real UserId here - the host already
+                    // has it from their own roster (ParticipantInfo.UserId), no name lookup needed.
+                    case SignalType.StreamTransferHost when message.HostId is { Length: > 0 } newHostId:
+                        if (rooms.FindRoomHostedBy(userId) is not { } ownedRoom ||
+                            !ownedRoom.Viewers.ContainsKey(newHostId))
+                        {
+                            break;
+                        }
+
+                        ownedRoom.Viewers.TryRemove(newHostId, out _);
+                        ownedRoom.Viewers[userId] = socket;
+                        ownedRoom.HostUserId = newHostId;
+                        viewingHostId = ownedRoom.RoomKey;
+
+                        var transferred = new StreamControl { Type = SignalType.StreamHostTransferred, HostId = newHostId };
+                        if (directory.TryGetSocket(newHostId, out var newHostSocket) && newHostSocket is not null)
+                        {
+                            await SendAsync(newHostSocket, transferred, token).ConfigureAwait(false);
+                        }
+
+                        await BroadcastAsync(ownedRoom, transferred, token).ConfigureAwait(false);
+                        await SendAsync(socket, transferred, token).ConfigureAwait(false);
+                        await BroadcastRosterAsync(ownedRoom, token).ConfigureAwait(false);
+                        break;
+
+                    case SignalType.StreamReaction when message.Reaction is { Length: > 0 }:
+                        // Broadcast to whichever room this user is currently part of, as either
+                        // host or viewer - reactions make sense from either side of a stream.
+                        var reactionRoom = rooms.FindRoomHostedBy(userId) ??
+                            (viewingHostId is { } currentRoomKey ? rooms.GetRoom(currentRoomKey) : null);
+                        if (reactionRoom is null)
+                        {
+                            break;
+                        }
+
+                        var reaction = message with { UserId = userId };
+                        await BroadcastAsync(reactionRoom, reaction, token).ConfigureAwait(false);
+                        if (directory.TryGetSocket(reactionRoom.HostUserId, out var reactionHostSocket) &&
+                            reactionHostSocket is not null)
+                        {
+                            await SendAsync(reactionHostSocket, reaction, token).ConfigureAwait(false);
                         }
 
                         break;
@@ -110,10 +156,14 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
         {
             directory.Disconnected(userId);
 
-            if (hostingRoomId is not null && rooms.GetRoom(hostingRoomId) is { } ownRoom)
+            // Computed fresh here rather than trusting a local snapshot from whenever StreamState
+            // last ran - a stream.transferHost can make someone the host of a room without them
+            // ever having sent StreamState themselves, so a stale local would miss that case (or
+            // wrongly tear down a room after they were transferred away from hosting it).
+            if (rooms.FindRoomHostedBy(userId) is { } ownRoom)
             {
-                rooms.RemoveRoom(hostingRoomId);
-                await BroadcastAsync(ownRoom, new StreamControl { Type = SignalType.StreamEnded, HostId = hostingRoomId },
+                rooms.RemoveRoom(ownRoom.RoomKey);
+                await BroadcastAsync(ownRoom, new StreamControl { Type = SignalType.StreamEnded, HostId = userId },
                     CancellationToken.None).ConfigureAwait(false);
             }
 

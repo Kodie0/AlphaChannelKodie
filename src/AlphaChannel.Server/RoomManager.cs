@@ -4,12 +4,14 @@ using AlphaChannel.Contracts;
 
 namespace AlphaChannel.Server;
 
-// A room is keyed by its host's UserId and exists only while that host is connected - created on
-// the host's first stream.state, torn down when the host's socket closes. No persistence: this is
-// the in-memory-only v1 the plan calls for, no database.
+// A room is keyed by RoomKey - originally always its creator's UserId, but that key stays fixed
+// for the room's whole lifetime even after a stream.transferHost changes who HostUserId actually
+// is. Torn down when whoever currently holds HostUserId disconnects. No persistence: this is the
+// in-memory-only v1 the plan calls for, no database.
 internal sealed class Room
 {
-    public required string HostUserId { get; init; }
+    public required string RoomKey { get; init; }
+    public required string HostUserId { get; set; }
     public StreamControl? LastState { get; set; }
     public ConcurrentDictionary<string, WebSocket> Viewers { get; } = new();
 }
@@ -19,10 +21,16 @@ internal sealed class RoomManager
     private readonly ConcurrentDictionary<string, Room> rooms = new();
 
     public Room GetOrCreateRoom(string hostUserId) =>
-        rooms.GetOrAdd(hostUserId, id => new Room { HostUserId = id });
+        rooms.GetOrAdd(hostUserId, id => new Room { RoomKey = id, HostUserId = id });
 
-    public Room? GetRoom(string hostUserId) =>
-        rooms.GetValueOrDefault(hostUserId);
+    public Room? GetRoom(string roomKey) =>
+        rooms.GetValueOrDefault(roomKey);
 
-    public void RemoveRoom(string hostUserId) => rooms.TryRemove(hostUserId, out _);
+    // Finds the room this user currently hosts, if any - independent of what the room's original
+    // RoomKey is, since a transfer can make HostUserId diverge from it. O(n) over live rooms is
+    // fine at this scale, same reasoning as UserDirectory.TryResolveUserId's own scan.
+    public Room? FindRoomHostedBy(string userId) =>
+        rooms.Values.FirstOrDefault(room => room.HostUserId == userId);
+
+    public void RemoveRoom(string roomKey) => rooms.TryRemove(roomKey, out _);
 }
