@@ -1,8 +1,8 @@
 services:
-  aetherchannel-server:
+  alphachannel-server:
     build:
       context: .
-      dockerfile: src/AetherChannel.Server/Dockerfile
+      dockerfile: src/AlphaChannel.Server/Dockerfile
     restart: unless-stopped
     expose:
       - "5000"
@@ -22,7 +22,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - aetherchannel-server
+      - alphachannel-server
 
 volumes:
   caddy_data:

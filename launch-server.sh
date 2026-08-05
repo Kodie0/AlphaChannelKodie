@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One-click launcher for the AetherChannel relay server (see AetherChannel/Desktop shortcut).
+# One-click launcher for the AlphaChannel relay server (see AlphaChannel/Desktop shortcut).
 set -e
 cd "$(dirname "$0")"
-echo "Starting AetherChannel relay server..."
-dotnet run --project src/AetherChannel.Server
+echo "Starting AlphaChannel relay server..."
+dotnet run --project src/AlphaChannel.Server
