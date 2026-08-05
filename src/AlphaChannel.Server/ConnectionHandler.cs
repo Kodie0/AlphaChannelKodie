@@ -145,6 +145,13 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
         {
             await SendAsync(viewer, roster, token).ConfigureAwait(false);
         }
+
+        // The host isn't in room.Viewers (they're not watching themselves) - push it to them
+        // separately so they can see who's actually tuned in.
+        if (directory.TryGetSocket(room.HostUserId, out var hostSocket) && hostSocket is not null)
+        {
+            await SendAsync(hostSocket, roster, token).ConfigureAwait(false);
+        }
     }
 
     private static async Task SendAsync(WebSocket socket, StreamControl message, CancellationToken token)

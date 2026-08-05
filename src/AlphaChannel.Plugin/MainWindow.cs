@@ -205,26 +205,49 @@ internal sealed class MainWindow : Window, IDisposable
     {
         ImGui.Text("Watch-along");
         ImGui.TextDisabled($"Your name: {CurrentDisplayName ?? "..."}");
-        ImGui.SetNextItemWidth(-100f);
-        ImGui.InputTextWithHint("##hostName", "Host's name", ref joinHostNameInput, 32);
-        ImGui.SameLine();
-        if (ImGui.Button("Join") && joinHostNameInput.Length > 0)
+
+        switch (stream.Mode)
         {
-            _ = stream.JoinAsync(joinHostNameInput.Trim());
+            case StreamMode.Hosting:
+                DrawRoster($"Watching ({stream.Roster.Length})");
+                break;
+
+            case StreamMode.Viewing:
+                if (ImGui.Button("Leave"))
+                {
+                    _ = stream.LeaveAsync();
+                }
+
+                DrawRoster($"Also watching ({stream.Roster.Length})");
+                break;
+
+            default:
+                ImGui.SetNextItemWidth(-100f);
+                ImGui.InputTextWithHint("##hostName", "Host's name", ref joinHostNameInput, 32);
+                ImGui.SameLine();
+                if (ImGui.Button("Join") && joinHostNameInput.Length > 0)
+                {
+                    _ = stream.JoinAsync(joinHostNameInput.Trim());
+                }
+
+                if (joinError is { } error)
+                {
+                    ImGui.TextColored(new Vector4(0.95f, 0.35f, 0.35f, 1f), error);
+                }
+
+                break;
+        }
+    }
+
+    private void DrawRoster(string label)
+    {
+        ImGui.Text(label);
+        if (stream.Roster.Length == 0)
+        {
+            ImGui.TextDisabled("Nobody yet.");
+            return;
         }
 
-        ImGui.SameLine();
-        if (ImGui.Button("Leave"))
-        {
-            _ = stream.LeaveAsync();
-        }
-
-        if (joinError is { } error)
-        {
-            ImGui.TextColored(new Vector4(0.95f, 0.35f, 0.35f, 1f), error);
-        }
-
-        ImGui.Text($"Mode: {stream.Mode}");
         for (var index = 0; index < stream.Roster.Length; index++)
         {
             ImGui.BulletText(stream.Roster[index].DisplayName);

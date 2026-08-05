@@ -46,4 +46,9 @@ internal sealed class UserDirectory
         displayNames.TryRemove(userId, out _);
         return sockets.TryGetValue(userId, out socket);
     }
+
+    // Used to push a host their own room's roster - a host isn't in Room.Viewers (they're not
+    // watching themselves), so BroadcastRosterAsync needs their socket separately to let them see
+    // who's actually tuned in.
+    public bool TryGetSocket(string userId, out WebSocket? socket) => sockets.TryGetValue(userId, out socket);
 }
