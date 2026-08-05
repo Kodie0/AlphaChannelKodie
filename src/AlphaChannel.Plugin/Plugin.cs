@@ -47,6 +47,14 @@ public sealed class Plugin : IDalamudPlugin
     // worth a corrective seek. Below this, natural playback + network jitter accounts for the gap.
     private const float SyncToleranceSeconds = 2.5f;
 
+    // The URL last handed to video.Play() as a viewer. VideoEngine.PlayVideo's own guard against
+    // redundant reloads only kicks in once its internal mpv instance actually exists - for a fresh
+    // video that can take up to several seconds (a YouTube rate-limit cooldown runs before the
+    // instance is created), and the host publishes state every tick with no diff-check, so without
+    // this a viewer could fire off dozens of concurrent PlayVideo calls for the same URL before the
+    // first one ever finishes initializing - exactly what looked like a permanently frozen screen.
+    private string? lastAppliedRemoteUrl;
+
     public string Name => "AlphaChannel";
 
     public Plugin()
@@ -234,7 +242,14 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        video.Play(url);
+        // Also re-trigger whenever the local player is genuinely idle (e.g. right after Join's own
+        // queue.Clear()/video.Stop()) even if the URL happens to match the last one applied -
+        // otherwise rejoining the same still-playing host would never actually restart playback.
+        if (url != lastAppliedRemoteUrl || video.State == VideoPlaybackState.Idle)
+        {
+            lastAppliedRemoteUrl = url;
+            video.Play(url);
+        }
 
         // The host publishes state every tick with no diff-check (see the publish site's own
         // comment on why), so this runs constantly. Seeking to the exact reported position every
