@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AlphaChannel.Plugin.Video;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -93,6 +94,31 @@ internal sealed partial class MainWindow : Window, IDisposable
         DrawWatchAlong();
         ImGui.Separator();
         DrawReactions();
+        ImGui.Separator();
+        DrawDonateButton();
+    }
+
+    private static readonly Vector4 KofiPink = new(0.98f, 0.29f, 0.55f, 1f);
+    private static readonly Vector4 KofiPinkHover = new(1.00f, 0.42f, 0.65f, 1f);
+    private static readonly Vector4 KofiPinkActive = new(0.85f, 0.20f, 0.45f, 1f);
+
+    private void DrawDonateButton()
+    {
+        using var color = ImRaii.PushColor(ImGuiCol.Button, KofiPink)
+            .Push(ImGuiCol.ButtonHovered, KofiPinkHover)
+            .Push(ImGuiCol.ButtonActive, KofiPinkActive);
+
+        if (ImGui.Button("Like what we've built? Donate on Ko-fi"))
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo("https://ko-fi.com/alphachannel") { UseShellExecute = true });
+            }
+            catch (Exception exception)
+            {
+                AepLog.Warning($"[Donate] Failed to open browser: {exception.Message}");
+            }
+        }
     }
 
     private void DrawNamePrompt()

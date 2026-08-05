@@ -50,9 +50,17 @@ internal sealed class VideoPlayer : IDisposable
         set => engine.CookiesPath = value;
     }
 
+    public bool UseFirefoxCookies
+    {
+        get => engine.UseFirefoxCookies;
+        set => engine.UseFirefoxCookies = value;
+    }
+
     public void SetVolume(int volumePercent) => engine.SetVolume(volumePercent);
 
     public void SetOverlayTitle(string title, string source) => engine.SetOverlayTitle(title, source);
+
+    public void SetReactions(IReadOnlyList<ReactionParticle> reactions) => engine.SetReactions(reactions);
 
     // True once mpv has nothing left to play (natural end, with keep-open=yes so it doesn't
     // reset position) or before anything has ever been loaded. Callers polling this for

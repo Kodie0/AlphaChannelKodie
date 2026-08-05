@@ -133,6 +133,16 @@ internal sealed partial class MainWindow
             }
         }
 
+        var useFirefox = Plugin.Cfg.UseFirefoxCookies;
+        if (ImGui.Checkbox("Read cookies from Firefox automatically", ref useFirefox))
+        {
+            Plugin.Cfg.UseFirefoxCookies = useFirefox;
+            Plugin.Cfg.Save();
+            video.UseFirefoxCookies = useFirefox;
+        }
+
+        ImGui.TextDisabled("Best-effort - needs an actual logged-in Firefox session. Falls back to the path below if it can't find one.");
+
         ImGui.SetNextItemWidth(-70f);
         ImGui.InputTextWithHint("##cookiesPath", "Path to cookies.txt", ref cookiesPathInput, 260);
         ImGui.SameLine();

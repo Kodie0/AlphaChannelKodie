@@ -226,6 +226,14 @@ internal sealed class AetherStreamQueue
             Advance();
         }
 
+        // Autoplay: if something got queued (Add) while nothing was already playing, start it
+        // rather than leaving it sitting there until the player manually presses something -
+        // matches what "Play now" already does immediately, just for the Add-to-queue path too.
+        if (Current is null && entries.Count > 0)
+        {
+            Advance();
+        }
+
         wasIdle = idle;
     }
 }

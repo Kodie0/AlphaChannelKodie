@@ -46,6 +46,11 @@ internal sealed class Configuration : IPluginConfiguration
     // age-restricted videos can play. Opt-in and empty by default.
     public string? YouTubeCookiesPath { get; set; }
 
+    // Alternative to YouTubeCookiesPath - reads cookies directly from a local Firefox profile
+    // instead of a manually-exported file. Best-effort: depends on yt-dlp being able to locate and
+    // read that profile from inside this process (see MpvRenderer's own note on the caveats).
+    public bool UseFirefoxCookies { get; set; }
+
     // Keyed by IClientState.LocalContentId - the display name a player picked is tied to the FFXIV
     // character they were playing when they picked it, not to the Windows/plugin install, so an alt
     // gets its own prompt instead of inheriting the main character's name.

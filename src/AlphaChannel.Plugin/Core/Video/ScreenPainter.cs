@@ -13,6 +13,11 @@ using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
 
 namespace AlphaChannel.Plugin.Video;
 
+//X/Y are uv coordinates on the screen quad (0..1, matching the VS's own uv mapping - see the
+//shader below for which corner is which), not world-space or pixel positions. Radius is also in
+//that same 0..1 uv space, not pixels.
+internal readonly record struct ReactionParticle(float X, float Y, float Alpha, float Radius, float R, float G, float B);
+
 // Ported from AlphaChannel's ScreenPainter (Voudi, GPL-3.0, tag v1.1.20260725.1088) - the revamp that
 // replaced the VFX/companion mounting (chara/monster/.../aetherstreamscreen_{session}.avfx cast on an
 // actor) with a screen drawn directly in world space, independent of any game object. Paints our video
@@ -41,6 +46,7 @@ internal sealed unsafe class ScreenPainter : IDisposable
 	private readonly PixelShader _ps;
 	private readonly PixelShader _glowPs;
 	private readonly PixelShader _titlePs;
+	private readonly PixelShader _reactionsPs;
 	private readonly SamplerState _sampler;
 	private readonly RasterizerState _rasterState;
 	private readonly DepthStencilState _depthState;
@@ -79,6 +85,11 @@ internal sealed unsafe class ScreenPainter : IDisposable
 	//instead, using bounds read straight from FFXIVClientStructs (AtkUnitBase/AtkResNode) - no hook needed.
 	private const int MaxUiRects = 64;
 
+	//AetherChannel addition - reactions rendered as simple GPU-drawn circles directly in
+	//ReactionsPS below, not a texture (unlike the title banner). No font/emoji asset needed, and
+	//per-frame updates are just a cbuffer write instead of a CPU rasterize + texture upload.
+	private const int MaxReactions = 16;
+
 	//Aetherphone addition on top of the upstream port - a slight cylindrical bow (curved-monitor look)
 	//across the screen's width. There's no per-vertex buffer at all here (the flat 4-corner quad was
 	//generated purely from SV_VertexID) - subdividing into a horizontal strip of quads and displacing
@@ -98,6 +109,15 @@ internal sealed unsafe class ScreenPainter : IDisposable
 		public float GlowScale;
 		public float TitleAlpha;
 		public fixed float UiRects[MaxUiRects * 4]; //Each rect: screenX, screenY, width, height (pixels).
+
+		//Kept as its own 16-byte-aligned group (float, not int, so there's no int/float3 packing
+		//ambiguity to worry about across the C#/HLSL boundary) before the two reaction arrays.
+		public float ReactionCount;
+		public float ReactionPad0;
+		public float ReactionPad1;
+		public float ReactionPad2;
+		public fixed float ReactionPos[MaxReactions * 4]; //xy = uv center (0..1), z = alpha, w = radius.
+		public fixed float ReactionColor[MaxReactions * 4]; //rgb = color, a unused.
 	}
 
 	internal ScreenPainter()
@@ -105,6 +125,8 @@ internal sealed unsafe class ScreenPainter : IDisposable
 		const string hlsl = @"
 			#define MAX_UI_RECTS 64
 			#define CURVE_SEGMENTS 24
+			#define MAX_REACTIONS 16
+				#define SCREEN_ASPECT (1.0 / 0.6)
 			cbuffer Params : register(b0)
 			{
 				row_major float4x4 worldViewProj;
@@ -113,6 +135,9 @@ internal sealed unsafe class ScreenPainter : IDisposable
 				float glowScale;
 				float titleAlpha;
 				float4 uiRects[MAX_UI_RECTS]; //xy = screen pos, zw = size, in pixels
+				float4 reactionMeta; //x = reaction count (truncated to int in-shader)
+				float4 reactionPos[MAX_REACTIONS]; //xy = uv center, z = alpha, w = radius
+				float4 reactionColor[MAX_REACTIONS]; //rgb = color
 			};
 			struct VOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
 
@@ -228,17 +253,60 @@ internal sealed unsafe class ScreenPainter : IDisposable
 					discard;
 				}
 				return float4(color.rgb, finalAlpha);
+			}
+
+			// Reactions - drawn as plain GPU circles (signed-distance-style smoothstep falloff), not a
+			// texture, so there's no font/emoji asset dependency and no per-frame CPU rasterize/upload
+			// cost. Composited on the same worldViewProj/geometry as everything else above.
+			float4 ReactionsPS(VOut i) : SV_TARGET
+			{
+				for (int r = 0; r < uiRectCount; r++)
+				{
+					float4 rect = uiRects[r];
+					if (i.pos.x >= rect.x && i.pos.x < rect.x + rect.z &&
+						i.pos.y >= rect.y && i.pos.y < rect.y + rect.w)
+					{
+						discard;
+					}
+				}
+
+				float4 accum = float4(0, 0, 0, 0);
+				int count = (int)reactionMeta.x;
+				for (int k = 0; k < count; k++)
+				{
+					float2 pos = reactionPos[k].xy;
+					float alpha = reactionPos[k].z;
+					float radius = reactionPos[k].w;
+					float dist = length(float2((i.uv.x - pos.x) * SCREEN_ASPECT, i.uv.y - pos.y));
+					float shape = 1.0 - smoothstep(radius * 0.7, radius, dist);
+					if (shape <= 0.0)
+					{
+						continue;
+					}
+
+					float a = shape * alpha;
+					accum.rgb = accum.rgb * (1.0 - a) + reactionColor[k].rgb * a;
+					accum.a = accum.a + a * (1.0 - accum.a);
+				}
+
+				if (accum.a <= 0.01)
+				{
+					discard;
+				}
+				return accum;
 			}";
 
 		using (var vsb = ShaderBytecode.Compile(hlsl, "VS", "vs_4_0"))
 		using (var psb = ShaderBytecode.Compile(hlsl, "PS", "ps_4_0"))
 		using (var glowPsb = ShaderBytecode.Compile(hlsl, "GlowPS", "ps_4_0"))
 		using (var titlePsb = ShaderBytecode.Compile(hlsl, "TitlePS", "ps_4_0"))
+		using (var reactionsPsb = ShaderBytecode.Compile(hlsl, "ReactionsPS", "ps_4_0"))
 		{
 			_vs = new VertexShader(DxHandler.Device, vsb);
 			_ps = new PixelShader(DxHandler.Device, psb);
 			_glowPs = new PixelShader(DxHandler.Device, glowPsb);
 			_titlePs = new PixelShader(DxHandler.Device, titlePsb);
+			_reactionsPs = new PixelShader(DxHandler.Device, reactionsPsb);
 		}
 
 		_sampler = new SamplerState(DxHandler.Device, new SamplerStateDescription
@@ -334,6 +402,34 @@ internal sealed unsafe class ScreenPainter : IDisposable
 		}
 	}
 
+	private IReadOnlyList<ReactionParticle> _reactions = System.Array.Empty<ReactionParticle>();
+
+	//Called every tick from Plugin.cs with the current set of active reaction particles - drawn as
+	//circles by ReactionsPS. An empty list is the normal idle state, not an error; DrawIfReady just
+	//sends a ReactionCount of 0 and the shader discards immediately.
+	internal void SetReactions(IReadOnlyList<ReactionParticle> reactions)
+	{
+		_reactions = reactions;
+	}
+
+	private void CollectReactions(ref ScreenParams p)
+	{
+		int count = Math.Min(_reactions.Count, MaxReactions);
+		p.ReactionCount = count;
+		for (int i = 0; i < count; i++)
+		{
+			ReactionParticle r = _reactions[i];
+			p.ReactionPos[i * 4 + 0] = r.X;
+			p.ReactionPos[i * 4 + 1] = r.Y;
+			p.ReactionPos[i * 4 + 2] = r.Alpha;
+			p.ReactionPos[i * 4 + 3] = r.Radius;
+			p.ReactionColor[i * 4 + 0] = r.R;
+			p.ReactionColor[i * 4 + 1] = r.G;
+			p.ReactionColor[i * 4 + 2] = r.B;
+			p.ReactionColor[i * 4 + 3] = 0f;
+		}
+	}
+
 	//1 for the first TitleHoldSeconds after a genuine title change, then ramps down to 0 over the
 	//following TitleFadeSeconds instead of just vanishing.
 	private float ComputeTitleAlpha()
@@ -407,6 +503,7 @@ internal sealed unsafe class ScreenPainter : IDisposable
 		{
 			var p = new ScreenParams { WorldViewProj = worldViewProj.Value, Curvature = Curvature, TitleAlpha = titleAlpha };
 			p.UiRectCount = CollectUiRects(ref p);
+			CollectReactions(ref p);
 
 			ctx.OutputMerger.SetRenderTargets(dsv, rtv);
 			//Explicit full-target viewport - we never set this before, so whatever viewport the game's last
@@ -455,6 +552,17 @@ internal sealed unsafe class ScreenPainter : IDisposable
 				ctx.PixelShader.SetShaderResource(1, titleSrv);
 				ctx.Draw(VertexCount, 0);
 				ctx.PixelShader.SetShaderResource(1, null);
+			}
+
+			//Reactions, drawn on top of everything - same worldViewProj/cbuffer already bound and
+			//uploaded from the main draw above (CollectReactions filled p's reaction fields before
+			//that single UpdateSubresource call), no texture involved so no second shader resource
+			//slot to bind/unbind either.
+			if (p.ReactionCount > 0)
+			{
+				ctx.OutputMerger.BlendState = _alphaBlend;
+				ctx.PixelShader.Set(_reactionsPs);
+				ctx.Draw(VertexCount, 0);
 			}
 
 			ctx.PixelShader.SetShaderResource(0, null);
@@ -655,6 +763,7 @@ internal sealed unsafe class ScreenPainter : IDisposable
 		_rasterState.Dispose();
 		_sampler.Dispose();
 		_titlePs.Dispose();
+		_reactionsPs.Dispose();
 		_glowPs.Dispose();
 		_ps.Dispose();
 		_vs.Dispose();

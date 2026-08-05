@@ -85,6 +85,10 @@ internal sealed class VideoEngine : IDisposable
     // mpv init time like the other options above, so a settings change applies on the next video.
     internal string? CookiesPath { get; set; }
 
+    // Alternative to CookiesPath - read cookies directly from a local Firefox profile instead of a
+    // manually exported file. Takes priority over CookiesPath when both are set.
+    internal bool UseFirefoxCookies { get; set; }
+
     internal Resources Resources { get; }
 
     internal VideoEngine()
@@ -159,7 +163,8 @@ internal sealed class VideoEngine : IDisposable
                 _mpvRenderer = new MpvRenderer();
                 _mpvRenderer.OnError = message => LastError = message;
                 _mpvRenderer.Initialize(ScreenWidth, ScreenHeight, _screenTexture, _renderCancellation,
-                    HardwareDecoding, MaxQualityHeight, AllowInsecureDirectUrls, _pendingVolume, CookiesPath);
+                    HardwareDecoding, MaxQualityHeight, AllowInsecureDirectUrls, _pendingVolume, CookiesPath,
+                    UseFirefoxCookies);
                 _mpvRenderer.Play(url, playbackPosition, isPlaying);
                 _isActive = true;
                 _screenPainter.SetTransform(ScreenPosition, ScreenYaw, ScreenScale);
@@ -374,6 +379,10 @@ internal sealed class VideoEngine : IDisposable
     //Called whenever the queue advances or a watch-along viewer's remote state changes, so the
     //in-world screen's own "now playing" banner tracks the same title everyone sees.
     internal void SetOverlayTitle(string title, string source) => _screenPainter.SetTitle(title, source);
+
+    //Called every tick from Plugin.cs with the current active reaction particles - see
+    //ScreenPainter.SetReactions for the render side.
+    internal void SetReactions(IReadOnlyList<ReactionParticle> reactions) => _screenPainter.SetReactions(reactions);
 
     //Hands the painter its texture and, if this is a genuinely new session (the screen was idle),
     //spawns it 2 units in front of the local player. Continuing/switching content on an

@@ -55,6 +55,13 @@ public sealed class Plugin : IDalamudPlugin
     // first one ever finishes initializing - exactly what looked like a permanently frozen screen.
     private string? lastAppliedRemoteUrl;
 
+    // Same accent color as MainWindow's theme, duplicated here rather than shared since this is
+    // the only in-world reaction color used (no per-icon color mapping for v1 - see
+    // MainWindow.Reactions.cs's own note on why the buttons only send a glyph, not a color).
+    private static readonly (float R, float G, float B) ReactionColor = (0.55f, 0.60f, 1.0f);
+    private static readonly TimeSpan ReactionLifetime = TimeSpan.FromSeconds(3);
+    private readonly List<InWorldReaction> activeReactions = new();
+
     public string Name => "AlphaChannel";
 
     public Plugin()
@@ -68,6 +75,7 @@ public sealed class Plugin : IDalamudPlugin
         video = new VideoPlayer(screenController.Engine);
         video.SetVolume(Cfg.Muted ? 0 : Cfg.Volume);
         video.CookiesPath = Cfg.YouTubeCookiesPath;
+        video.UseFirefoxCookies = Cfg.UseFirefoxCookies;
         queue = new AetherStreamQueue(video);
         stream = new StreamClient(Cfg, () => Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId()));
         stream.OnState += OnRemoteState;
@@ -130,6 +138,7 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         ApplyAutoPause();
+        UpdateReactions();
 
         // Hosting: push the local queue's current state out to the relay every tick it changes
         // meaningfully - PublishStateAsync itself is cheap to call repeatedly (a JSON send), the
@@ -173,6 +182,40 @@ public sealed class Plugin : IDalamudPlugin
             autoPaused = false;
         }
     }
+
+    // Drains stream.IncomingReactions (the sole consumer - MainWindow's reaction buttons only
+    // send, they don't also drain, since a ConcurrentQueue only lets one consumer actually get
+    // each item) and pushes the current animated particle set to the in-world screen every tick.
+    // Spawns near the bottom of the screen (uv.y close to 1, just above the title banner's own
+    // band) and rises toward the top over ReactionLifetime, matching the GUI's earlier "fly up"
+    // behavior but rendered on the actual video screen instead.
+    private void UpdateReactions()
+    {
+        while (stream.IncomingReactions.TryDequeue(out _))
+        {
+            activeReactions.Add(new InWorldReaction(DateTime.UtcNow, (float)(reactionRandom.NextDouble() * 0.3 - 0.15)));
+        }
+
+        activeReactions.RemoveAll(reaction => DateTime.UtcNow - reaction.SpawnedAt >= ReactionLifetime);
+
+        var particles = new List<ReactionParticle>(activeReactions.Count);
+        var now = DateTime.UtcNow;
+        foreach (var reaction in activeReactions)
+        {
+            var progress = Math.Clamp((float)(now - reaction.SpawnedAt).TotalSeconds /
+                (float)ReactionLifetime.TotalSeconds, 0f, 1f);
+            var x = Math.Clamp(0.5f + reaction.XJitter, 0.05f, 0.95f);
+            var y = 0.85f - progress * 0.7f;
+            var alpha = 1f - progress;
+            particles.Add(new ReactionParticle(x, y, alpha, 0.05f, ReactionColor.R, ReactionColor.G, ReactionColor.B));
+        }
+
+        video.SetReactions(particles);
+    }
+
+    private readonly Random reactionRandom = new();
+
+    private readonly record struct InWorldReaction(DateTime SpawnedAt, float XJitter);
 
     // Runs every tick (cheap dictionary lookup) rather than once at startup because LocalContentId
     // is 0 until the player is actually logged into a character - a dev plugin can load at the
