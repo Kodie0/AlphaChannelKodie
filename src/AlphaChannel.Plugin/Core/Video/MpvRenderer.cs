@@ -392,20 +392,25 @@ namespace AlphaChannel.Plugin.Video
 		{
 			if (_closed)
 			{
-				return [0, 0, 100];
+				return [0, 0, 100, 0, 0];
 			}
 
 			lock (_mpvLock)
 			{
 				if (_mpvCtx == IntPtr.Zero)
 				{
-					return [0, 0, 100];
+					return [0, 0, 100, 0, 0];
 				}
 
 				_ = mpv_get_property(_mpvCtx, "time-pos", 5, out double position);
 				_ = mpv_get_property(_mpvCtx, "duration", 5, out double duration);
 				_ = mpv_get_property(_mpvCtx, "volume", 5, out double volume);
-				return [position, duration, volume];
+				// dwidth/dheight are the stream's actual decoded resolution (post yt-dlp format
+				// selection), not this renderer's fixed offscreen texture size - what the Player
+				// tab shows so players can tell what quality they're actually getting.
+				_ = mpv_get_property(_mpvCtx, "dwidth", 5, out double streamWidth);
+				_ = mpv_get_property(_mpvCtx, "dheight", 5, out double streamHeight);
+				return [position, duration, volume, streamWidth, streamHeight];
 			}
 		}
 

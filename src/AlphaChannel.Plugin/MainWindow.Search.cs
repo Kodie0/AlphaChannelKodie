@@ -65,17 +65,6 @@ internal sealed partial class MainWindow
             ImGui.TextDisabled("Searching...");
         }
 
-        // Tucked away below the search box, collapsed by default - this is a one-time setup step
-        // for a minority of videos, not the primary thing this tab is for, and shouldn't compete
-        // with the search box for attention every time the tab opens.
-        ImGui.Spacing();
-        if (ImGui.CollapsingHeader("Age-restricted video settings"))
-        {
-            ImGui.Indent();
-            DrawCookiesSettings();
-            ImGui.Unindent();
-        }
-
         if (searchResults is not { } results || results.Count == 0)
         {
             return;

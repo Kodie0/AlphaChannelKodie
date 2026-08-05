@@ -43,7 +43,11 @@ internal sealed partial class MainWindow
             video.Seek(seekPreview);
         }
 
-        ImGui.TextDisabled($"{FormatTime(position)} / {FormatTime(duration)}");
+        var (streamWidth, streamHeight) = video.GetResolution();
+        var timeText = $"{FormatTime(position)} / {FormatTime(duration)}";
+        ImGui.TextDisabled(streamWidth > 0 && streamHeight > 0
+            ? $"{timeText}  -  {streamWidth}x{streamHeight}"
+            : timeText);
 
         if (video.LastError is { } error)
         {

@@ -113,6 +113,14 @@ internal sealed class VideoPlayer : IDisposable
         return ((float)info[0], (float)info[1], engine.GetPaused());
     }
 
+    // Separate from GetProgress() rather than folded into its tuple - existing call sites
+    // deconstruct that tuple positionally and would silently break if it grew.
+    public (int Width, int Height) GetResolution()
+    {
+        var info = engine.GetInfo();
+        return ((int)info[3], (int)info[4]);
+    }
+
     public byte[]? TryGetFrame(out int width, out int height) => engine.TryGetFrame(out width, out height);
 
     public void Stop()

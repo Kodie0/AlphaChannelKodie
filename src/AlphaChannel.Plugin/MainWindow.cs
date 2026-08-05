@@ -94,15 +94,13 @@ internal sealed partial class MainWindow : Window, IDisposable
                 ImGui.Spacing();
                 ImGui.Separator();
                 ImGui.Spacing();
+                SectionHeader("Discover");
+                DrawSearch();
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
                 SectionHeader("Queue");
                 DrawQueue();
-                ImGui.EndTabItem();
-            }
-
-            if (ImGui.BeginTabItem("Discover"))
-            {
-                ImGui.Spacing();
-                DrawSearch();
                 ImGui.EndTabItem();
             }
 
@@ -121,6 +119,13 @@ internal sealed partial class MainWindow : Window, IDisposable
                 ImGui.Separator();
                 ImGui.Spacing();
                 DrawReactions();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Settings"))
+            {
+                ImGui.Spacing();
+                DrawSettings();
                 ImGui.EndTabItem();
             }
 

@@ -218,10 +218,10 @@ internal sealed class VideoEngine : IDisposable
     {
         if (!_renderCancellation.Token.IsCancellationRequested)
         {
-            return _mpvRenderer?.GetProperties() ?? [0, 0, 0];
+            return _mpvRenderer?.GetProperties() ?? [0, 0, 0, 0, 0];
         }
 
-        return [0, 0, 0];
+        return [0, 0, 0, 0, 0];
     }
 
     internal void Seek(int seconds)
