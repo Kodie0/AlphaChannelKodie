@@ -61,6 +61,16 @@ internal sealed partial class MainWindow
         ImGui.SameLine();
         DrawVolumeControl();
 
+        ImGui.SameLine();
+        if (IconButton(FontAwesomeIcon.PowerOff))
+        {
+            // Deliberately queue.Clear(), not video.Pause/Stop directly - Clear() is the one path
+            // that actually deactivates the in-world screen (makes it disappear) rather than just
+            // freezing it on the last frame, which is what a bare Stop leaves behind (see
+            // AetherStreamQueue.Advance's own comment on why that's the deliberate idle behavior).
+            queue.Clear();
+        }
+
         if (!seekDragging)
         {
             seekPreview = position;
