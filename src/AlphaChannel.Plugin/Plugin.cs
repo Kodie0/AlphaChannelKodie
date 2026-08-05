@@ -1,5 +1,6 @@
 using AlphaChannel.Plugin.Video;
 using Dalamud.Game.Command;
+using Dalamud.Game.Gui.ContextMenu;
 using Dalamud.Game.Gui.NamePlate;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
@@ -18,6 +19,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IGameInteropProvider InteropProvider { get; private set; } = null!;
     [PluginService] internal static INamePlateGui NamePlateGui { get; private set; } = null!;
+    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     internal static Configuration Cfg { get; private set; } = null!;
@@ -52,6 +54,7 @@ public sealed class Plugin : IDalamudPlugin
         Framework.Update += OnFrameworkUpdate;
         PluginInterface.UiBuilder.Draw += windowSystem.Draw;
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainWindow;
+        ContextMenu.OnMenuOpened += OnMenuOpened;
         CommandManager.AddHandler("/achannel", new CommandInfo(OnCommand)
         {
             HelpMessage = "Open the AlphaChannel window.",
@@ -59,6 +62,28 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OnCommand(string command, string arguments) => ToggleMainWindow();
+
+    // Right-click a player -> Join Stream, using their character name as the join target. Works
+    // whenever that player kept the name the first-connect prompt suggests by default (their real
+    // character name) - same name-matching the manual "Host's name" field in the window already
+    // relies on, this is just a shortcut that skips typing it.
+    private void OnMenuOpened(IMenuOpenedArgs args)
+    {
+        if (args.Target is not MenuTargetDefault { TargetName.Length: > 0 } target)
+        {
+            return;
+        }
+
+        args.AddMenuItem(new MenuItem
+        {
+            Name = "Join Stream",
+            OnClicked = clickedArgs =>
+            {
+                _ = stream.JoinAsync(target.TargetName);
+                mainWindow.IsOpen = true;
+            },
+        });
+    }
 
     private void ToggleMainWindow() => mainWindow.IsOpen = !mainWindow.IsOpen;
 
@@ -149,6 +174,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         CommandManager.RemoveHandler("/achannel");
+        ContextMenu.OnMenuOpened -= OnMenuOpened;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainWindow;
         PluginInterface.UiBuilder.Draw -= windowSystem.Draw;
         Framework.Update -= OnFrameworkUpdate;
