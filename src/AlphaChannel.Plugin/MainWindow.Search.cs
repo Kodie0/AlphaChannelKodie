@@ -11,6 +11,7 @@ internal sealed partial class MainWindow
     private readonly TwitchChannelChecker twitchChecker = new();
     private string searchQuery = string.Empty;
     private string cookiesPathInput = Plugin.Cfg.YouTubeCookiesPath ?? string.Empty;
+    private string? cookiesSearchError;
 
     // Written from RunSearchAsync's continuation, which resumes on an arbitrary thread pool thread
     // (not the main thread Draw() runs on) - same reasoning as Plugin.cs's pendingRemoteState.
@@ -154,10 +155,53 @@ internal sealed partial class MainWindow
             video.CookiesPath = path;
         }
 
+        if (ImGui.SmallButton("Find in Downloads"))
+        {
+            cookiesSearchError = null;
+            var found = FindCookiesFileInDownloads();
+            if (found is not null)
+            {
+                cookiesPathInput = found;
+            }
+            else
+            {
+                cookiesSearchError = "No cookies file found in Downloads - export one first (see above).";
+            }
+        }
+
+        if (cookiesSearchError is { } searchError)
+        {
+            ImGui.TextColored(Danger, searchError);
+        }
+
         if (!string.IsNullOrEmpty(Plugin.Cfg.YouTubeCookiesPath))
         {
             var exists = File.Exists(Plugin.Cfg.YouTubeCookiesPath);
             ImGui.TextColored(exists ? Good : Danger, exists ? "Cookies file found." : "File not found at that path.");
+        }
+    }
+
+    // Browser cookie-export extensions default to saving into Downloads - this saves typing the
+    // full path out by hand. Picks whichever matching file was modified most recently, in case
+    // there are several from past exports.
+    private static string? FindCookiesFileInDownloads()
+    {
+        try
+        {
+            var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            if (!Directory.Exists(downloads))
+            {
+                return null;
+            }
+
+            return Directory.GetFiles(downloads, "*cookies*.txt")
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning($"[YouTube] Failed to search Downloads for a cookies file: {exception.Message}");
+            return null;
         }
     }
 
