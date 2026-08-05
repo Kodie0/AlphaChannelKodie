@@ -19,7 +19,8 @@ internal sealed partial class MainWindow
     {
         ImGui.Text("Playback");
         ImGui.SetNextItemWidth(-70f);
-        ImGui.InputTextWithHint("##url", "Video URL", ref urlInput, 2000);
+        var submittedUrl = ImGui.InputTextWithHint("##url", "Video URL", ref urlInput, 2000,
+            ImGuiInputTextFlags.EnterReturnsTrue);
         ImGui.SameLine();
         if (ImGui.Button("Paste"))
         {
@@ -30,7 +31,8 @@ internal sealed partial class MainWindow
             }
         }
 
-        if (ImGui.Button("Play now") && urlInput.Length > 0)
+        var playNowClicked = ImGui.Button("Play now");
+        if ((submittedUrl || playNowClicked) && urlInput.Length > 0)
         {
             queue.PlayNow(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
             urlInput = string.Empty;

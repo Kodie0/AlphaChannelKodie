@@ -18,9 +18,11 @@ internal sealed partial class MainWindow
     {
         ImGui.Text("Search YouTube");
         ImGui.SetNextItemWidth(-40f);
-        ImGui.InputTextWithHint("##search", "Search query", ref searchQuery, 200);
+        var submitted = ImGui.InputTextWithHint("##search", "Search query", ref searchQuery, 200,
+            ImGuiInputTextFlags.EnterReturnsTrue);
         ImGui.SameLine();
-        if (IconButton(FontAwesomeIcon.Search) && searchQuery.Length > 0 && !isSearching)
+        var clicked = IconButton(FontAwesomeIcon.Search);
+        if ((submitted || clicked) && searchQuery.Length > 0 && !isSearching)
         {
             isSearching = true;
             _ = RunSearchAsync(searchQuery);

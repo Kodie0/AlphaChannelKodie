@@ -43,6 +43,10 @@ public sealed class Plugin : IDalamudPlugin
     // manually - otherwise leaving combat would un-pause a video the host deliberately stopped.
     private bool autoPaused;
 
+    // How far a viewer's local position can drift from the host's reported position before it's
+    // worth a corrective seek. Below this, natural playback + network jitter accounts for the gap.
+    private const float SyncToleranceSeconds = 2.5f;
+
     public string Name => "AlphaChannel";
 
     public Plugin()
@@ -206,9 +210,19 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         video.Play(url);
+
+        // The host publishes state every tick with no diff-check (see the publish site's own
+        // comment on why), so this runs constantly. Seeking to the exact reported position every
+        // single time fights the viewer's own playback clock - it never gets to run forward
+        // smoothly, it just gets yanked back to a slightly-network-lagged position 60 times a
+        // second, which is the actual jank a viewer would see. Only correct real drift instead.
         if (message.PositionSeconds is { } position)
         {
-            video.Seek((float)position);
+            var localPosition = video.GetProgress().Position;
+            if (MathF.Abs(localPosition - (float)position) > SyncToleranceSeconds)
+            {
+                video.Seek((float)position);
+            }
         }
 
         video.Pause(message.Paused ?? false);

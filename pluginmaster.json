@@ -3,7 +3,7 @@
     "Author": "K.I.R.O",
     "Name": "AlphaChannel",
     "InternalName": "AlphaChannel.Plugin",
-    "AssemblyVersion": "1.2.0.0",
+    "AssemblyVersion": "1.2.2.0",
     "Description": "Renders an in-world video screen and syncs playback with other players running AlphaChannel over a self-hosted relay.",
     "ApplicableVersion": "any",
     "Tags": [
@@ -15,7 +15,7 @@
     "Punchline": "A shared in-world video screen.",
     "AcceptsFeedback": true,
     "RepoUrl": "https://github.com/vinney491-dotcom/AlphaChannel",
-    "DownloadLinkInstall": "https://github.com/vinney491-dotcom/AlphaChannel/releases/download/v1.2.0.0/AlphaChannel.Plugin.zip",
-    "DownloadLinkUpdate": "https://github.com/vinney491-dotcom/AlphaChannel/releases/download/v1.2.0.0/AlphaChannel.Plugin.zip"
+    "DownloadLinkInstall": "https://github.com/vinney491-dotcom/AlphaChannel/releases/download/v1.2.2.0/AlphaChannel.Plugin.zip",
+    "DownloadLinkUpdate": "https://github.com/vinney491-dotcom/AlphaChannel/releases/download/v1.2.2.0/AlphaChannel.Plugin.zip"
   }
 ]
