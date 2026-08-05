@@ -41,6 +41,11 @@ internal sealed class Configuration : IPluginConfiguration
     public int Volume { get; set; } = 100;
     public bool Muted { get; set; }
 
+    // Path to a cookies.txt file the player exported themselves from their own logged-in browser
+    // session - never anything we generate or transmit, just a local file path handed to yt-dlp so
+    // age-restricted videos can play. Opt-in and empty by default.
+    public string? YouTubeCookiesPath { get; set; }
+
     // Keyed by IClientState.LocalContentId - the display name a player picked is tied to the FFXIV
     // character they were playing when they picked it, not to the Windows/plugin install, so an alt
     // gets its own prompt instead of inheriting the main character's name.

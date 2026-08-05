@@ -59,6 +59,7 @@ public sealed class Plugin : IDalamudPlugin
         screenController = new ScreenController(() => true);
         video = new VideoPlayer(screenController.Engine);
         video.SetVolume(Cfg.Muted ? 0 : Cfg.Volume);
+        video.CookiesPath = Cfg.YouTubeCookiesPath;
         queue = new AetherStreamQueue(video);
         stream = new StreamClient(Cfg, () => Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId()));
         stream.OnState += OnRemoteState;
@@ -94,6 +95,8 @@ public sealed class Plugin : IDalamudPlugin
         args.AddMenuItem(new MenuItem
         {
             Name = "Join Stream",
+            PrefixChar = 'A',
+            PrefixColor = 588,
             OnClicked = clickedArgs =>
             {
                 queue.Clear();

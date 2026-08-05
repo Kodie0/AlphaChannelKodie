@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AlphaChannel.Plugin.Video;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -9,6 +10,7 @@ internal sealed partial class MainWindow
     private readonly VideoUrlResolver searchResolver = new();
     private readonly TwitchChannelChecker twitchChecker = new();
     private string searchQuery = string.Empty;
+    private string cookiesPathInput = Plugin.Cfg.YouTubeCookiesPath ?? string.Empty;
 
     // Written from RunSearchAsync's continuation, which resumes on an arbitrary thread pool thread
     // (not the main thread Draw() runs on) - same reasoning as Plugin.cs's pendingRemoteState.
@@ -44,6 +46,9 @@ internal sealed partial class MainWindow
 
     private void DrawYouTubeSearch()
     {
+        DrawCookiesSettings();
+        ImGui.Separator();
+
         ImGui.SetNextItemWidth(-40f);
         var submitted = ImGui.InputTextWithHint("##search", "Search query", ref searchQuery, 200,
             ImGuiInputTextFlags.EnterReturnsTrue);
@@ -108,6 +113,42 @@ internal sealed partial class MainWindow
     {
         searchResults = await searchResolver.SearchAsync(query, 8, CancellationToken.None).ConfigureAwait(false);
         isSearching = false;
+    }
+
+    // Opt-in workaround for age-restricted videos, which yt-dlp otherwise refuses outright. Only
+    // ever stores/uses a file path the player supplies themselves - see Configuration's own note
+    // on why this isn't something the plugin generates or transmits.
+    private void DrawCookiesSettings()
+    {
+        ImGui.TextDisabled("Age-restricted videos need a YouTube login (cookies.txt).");
+        if (ImGui.Button("Open YouTube to sign in"))
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo("https://www.youtube.com") { UseShellExecute = true });
+            }
+            catch (Exception exception)
+            {
+                AepLog.Warning($"[YouTube] Failed to open browser: {exception.Message}");
+            }
+        }
+
+        ImGui.SetNextItemWidth(-70f);
+        ImGui.InputTextWithHint("##cookiesPath", "Path to cookies.txt", ref cookiesPathInput, 260);
+        ImGui.SameLine();
+        if (ImGui.Button("Save##cookies"))
+        {
+            var path = string.IsNullOrWhiteSpace(cookiesPathInput) ? null : cookiesPathInput.Trim();
+            Plugin.Cfg.YouTubeCookiesPath = path;
+            Plugin.Cfg.Save();
+            video.CookiesPath = path;
+        }
+
+        if (!string.IsNullOrEmpty(Plugin.Cfg.YouTubeCookiesPath))
+        {
+            var exists = File.Exists(Plugin.Cfg.YouTubeCookiesPath);
+            ImGui.TextColored(exists ? Good : Danger, exists ? "Cookies file found." : "File not found at that path.");
+        }
     }
 
     // Not a real search - see TwitchChannelChecker's own comment on why. Just checks whether one

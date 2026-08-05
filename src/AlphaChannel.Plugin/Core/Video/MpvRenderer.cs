@@ -62,7 +62,7 @@ namespace AlphaChannel.Plugin.Video
 
 		public void Initialize(int width, int height, Texture2D? targetTexture, CancellationTokenSource cancelToken,
 			bool hardwareDecoding = false, int maxQualityHeight = 1080, bool allowInsecureDirectUrls = false,
-			int initialVolume = 60)
+			int initialVolume = 60, string? cookiesPath = null)
 		{
 			_width = width;
 			_height = height;
@@ -87,7 +87,15 @@ namespace AlphaChannel.Plugin.Video
 			_ = mpv_set_option_string(_mpvCtx, "terminal", "yes");
 			_ = mpv_set_option_string(_mpvCtx, "volume", initialVolume.ToString(System.Globalization.CultureInfo.InvariantCulture));
 			_ = mpv_set_option_string(_mpvCtx, "msg-level", "all=warn,ffmpeg=error");
-			_ = mpv_set_option_string(_mpvCtx, "ytdl-raw-options", "force-ipv4=,hls-use-mpegts=");
+			var ytdlRawOptions = "force-ipv4=,hls-use-mpegts=";
+			if (!string.IsNullOrEmpty(cookiesPath))
+			{
+				// Lets yt-dlp play age-restricted videos using a real logged-in session - the file
+				// itself is never touched by us beyond handing its path to yt-dlp here.
+				ytdlRawOptions += $",cookies={cookiesPath}";
+			}
+
+			_ = mpv_set_option_string(_mpvCtx, "ytdl-raw-options", ytdlRawOptions);
 			_ = mpv_set_option_string(_mpvCtx, "idle", "yes");
 			_ = mpv_set_option_string(_mpvCtx, "keep-open", "yes");
 			// Wine's own certificate store is essentially empty by default - only disabling

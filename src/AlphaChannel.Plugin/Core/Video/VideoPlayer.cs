@@ -44,6 +44,12 @@ internal sealed class VideoPlayer : IDisposable
         set => engine.MaxQualityHeight = value;
     }
 
+    public string? CookiesPath
+    {
+        get => engine.CookiesPath;
+        set => engine.CookiesPath = value;
+    }
+
     public void SetVolume(int volumePercent) => engine.SetVolume(volumePercent);
 
     public void SetOverlayTitle(string title, string source) => engine.SetOverlayTitle(title, source);

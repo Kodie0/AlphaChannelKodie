@@ -80,6 +80,11 @@ internal sealed class VideoEngine : IDisposable
     internal int MaxQualityHeight { get; set; } = 720;
     internal bool AllowInsecureDirectUrls { get; set; }
 
+    // Path to a Netscape-format cookies.txt the player exported from their own logged-in browser
+    // session - lets yt-dlp play age-restricted videos it would otherwise refuse. Read fresh at
+    // mpv init time like the other options above, so a settings change applies on the next video.
+    internal string? CookiesPath { get; set; }
+
     internal Resources Resources { get; }
 
     internal VideoEngine()
@@ -154,7 +159,7 @@ internal sealed class VideoEngine : IDisposable
                 _mpvRenderer = new MpvRenderer();
                 _mpvRenderer.OnError = message => LastError = message;
                 _mpvRenderer.Initialize(ScreenWidth, ScreenHeight, _screenTexture, _renderCancellation,
-                    HardwareDecoding, MaxQualityHeight, AllowInsecureDirectUrls, _pendingVolume);
+                    HardwareDecoding, MaxQualityHeight, AllowInsecureDirectUrls, _pendingVolume, CookiesPath);
                 _mpvRenderer.Play(url, playbackPosition, isPlaying);
                 _isActive = true;
                 _screenPainter.SetTransform(ScreenPosition, ScreenYaw, ScreenScale);
