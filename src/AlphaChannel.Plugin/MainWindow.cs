@@ -26,6 +26,7 @@ internal sealed partial class MainWindow : Window, IDisposable
     private readonly AetherStreamQueue queue;
     private readonly StreamClient stream;
     private readonly ThumbnailCache thumbnails = new();
+    private readonly Action requestRename;
     private string joinHostNameInput = string.Empty;
     private string? joinError;
 
@@ -41,12 +42,13 @@ internal sealed partial class MainWindow : Window, IDisposable
     internal string? CurrentDisplayName { get; set; }
 
     internal MainWindow(ScreenController screenController, VideoPlayer video, AetherStreamQueue queue,
-        StreamClient stream) : base("AlphaChannel###AlphaChannelMain")
+        StreamClient stream, Action requestRename) : base("AlphaChannel###AlphaChannelMain")
     {
         this.screenController = screenController;
         this.video = video;
         this.queue = queue;
         this.stream = stream;
+        this.requestRename = requestRename;
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(380, 460),
@@ -130,6 +132,11 @@ internal sealed partial class MainWindow : Window, IDisposable
     {
         ImGui.Text("Watch-along");
         ImGui.TextDisabled($"Your name: {CurrentDisplayName ?? "..."}");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Rename"))
+        {
+            requestRename();
+        }
 
         switch (stream.Mode)
         {
@@ -159,6 +166,7 @@ internal sealed partial class MainWindow : Window, IDisposable
                 ImGui.SameLine();
                 if (ImGui.Button("Join") && joinHostNameInput.Length > 0)
                 {
+                    queue.Clear();
                     _ = stream.JoinAsync(joinHostNameInput.Trim());
                 }
 

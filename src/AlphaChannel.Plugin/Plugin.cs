@@ -65,7 +65,7 @@ public sealed class Plugin : IDalamudPlugin
         stream.OnRenameRequired += OnRenameRequired;
         stream.Start();
 
-        mainWindow = new MainWindow(screenController, video, queue, stream);
+        mainWindow = new MainWindow(screenController, video, queue, stream, RequestRename);
         windowSystem.AddWindow(mainWindow);
 
         Framework.Update += OnFrameworkUpdate;
@@ -96,6 +96,7 @@ public sealed class Plugin : IDalamudPlugin
             Name = "Join Stream",
             OnClicked = clickedArgs =>
             {
+                queue.Clear();
                 _ = stream.JoinAsync(target.TargetName);
                 mainWindow.IsOpen = true;
             },
@@ -121,11 +122,13 @@ public sealed class Plugin : IDalamudPlugin
 
         // Hosting: push the local queue's current state out to the relay every tick it changes
         // meaningfully - PublishStateAsync itself is cheap to call repeatedly (a JSON send), the
-        // server is what dedupes/broadcasts, so no local diff-check is needed for a v1. The Mode
-        // check matters now that stream.transferHost exists - without it, a host who was just
-        // transferred away from hosting (Mode flips to Viewing) would keep publishing their own
-        // stale local queue state and stomp on the new host's.
-        if (stream.Mode == StreamMode.Hosting && queue.Current is { } current && screenController.Engine.IsActive)
+        // server is what dedupes/broadcasts, so no local diff-check is needed for a v1.
+        // Mode != Viewing, not Mode == Hosting: PublishStateAsync is what SETS Mode to Hosting in
+        // the first place, so gating on it already being Hosting is a deadlock - a fresh host
+        // (Mode.None) would never publish, never become Hosting, and nobody could ever join them.
+        // Mode != Viewing still correctly blocks a host who was just transferred away (Mode flips
+        // to Viewing) from continuing to publish their own stale local queue state.
+        if (stream.Mode != StreamMode.Viewing && queue.Current is { } current && screenController.Engine.IsActive)
         {
             var (position, _, paused) = video.GetProgress();
             _ = stream.PublishStateAsync(current.Url, position, paused, screenController.Engine.ScreenPosition,
@@ -171,7 +174,26 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        var suggested = ObjectTable.LocalPlayer?.Name.TextValue ?? "Player";
+        PromptForName(contentId, ObjectTable.LocalPlayer?.Name.TextValue ?? "Player");
+    }
+
+    // Manually triggered from MainWindow's "Rename" button - same flow as the automatic
+    // first-connect prompt above, just invocable any time instead of only once per character.
+    private void RequestRename()
+    {
+        var contentId = ReadLocalContentId();
+        if (contentId == 0 || mainWindow.IsNamePromptActive)
+        {
+            return;
+        }
+
+        var suggested = Cfg.CharacterDisplayNames.GetValueOrDefault(contentId) ??
+            ObjectTable.LocalPlayer?.Name.TextValue ?? "Player";
+        PromptForName(contentId, suggested);
+    }
+
+    private void PromptForName(ulong contentId, string suggested)
+    {
         mainWindow.RequestNamePrompt(suggested, name =>
         {
             Cfg.CharacterDisplayNames[contentId] = name;

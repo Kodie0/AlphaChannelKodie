@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using Dalamud.Interface.Textures.TextureWraps;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
 
 namespace AlphaChannel.Plugin.Video;
 
@@ -37,8 +39,18 @@ internal sealed class ThumbnailCache : IDisposable
     {
         try
         {
-            var bytes = await http.GetByteArrayAsync(url).ConfigureAwait(false);
-            var wrap = await Plugin.TextureProvider.CreateFromImageAsync(bytes).ConfigureAwait(false);
+            var sourceBytes = await http.GetByteArrayAsync(url).ConfigureAwait(false);
+
+            // Thumbnail URLs (YouTube, Twitch) are JPEG. Dalamud's CreateFromImageAsync only
+            // documents/reliably supports .tex and .png - handing it a JPEG directly fails with
+            // "the file is not a TexFile" every time. Re-encode to PNG ourselves first via
+            // ImageSharp, already a dependency for the title-banner texture rendering.
+            using var image = Image.Load(sourceBytes);
+            using var pngStream = new MemoryStream();
+            await image.SaveAsync(pngStream, new PngEncoder()).ConfigureAwait(false);
+            pngStream.Position = 0;
+
+            var wrap = await Plugin.TextureProvider.CreateFromImageAsync(pngStream.ToArray()).ConfigureAwait(false);
             cache[url] = wrap;
         }
         catch (Exception exception)
