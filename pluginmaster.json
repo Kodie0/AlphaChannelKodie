@@ -1,0 +1,21 @@
+[
+  {
+    "Author": "K.I.R.O",
+    "Name": "AetherChannel",
+    "InternalName": "AetherChannel.Plugin",
+    "AssemblyVersion": "1.0.0.0",
+    "Description": "Renders an in-world video screen and syncs playback with other players running AetherChannel over a self-hosted relay.",
+    "ApplicableVersion": "any",
+    "Tags": [
+      "video",
+      "watch party",
+      "media"
+    ],
+    "DalamudApiLevel": 15,
+    "Punchline": "A shared in-world video screen.",
+    "AcceptsFeedback": true,
+    "RepoUrl": "https://github.com/vinney491-dotcom/AlphaChannel",
+    "DownloadLinkInstall": "https://github.com/vinney491-dotcom/AlphaChannel/releases/download/v1.0.0.0/AetherChannel.Plugin.zip",
+    "DownloadLinkUpdate": "https://github.com/vinney491-dotcom/AlphaChannel/releases/download/v1.0.0.0/AetherChannel.Plugin.zip"
+  }
+]
