@@ -233,31 +233,46 @@ internal sealed partial class MainWindow : Window, IDisposable
         DrawDonateLink();
     }
 
+    // InvisibleButton, not Selectable+PushColor(Header) - the same proven click-region technique
+    // MainWindow.Home.cs's DrawTile already uses successfully. Selectable's "selected" background
+    // draws through ImGuiCol.Header, and something about combining that with the PushColor
+    // condition parameter and a same-frame draw-list text overlay was making these rows register
+    // visually but not actually respond to clicks in-game.
     private void DrawNavItem(HomePage page, FontAwesomeIcon icon, string label)
     {
         var active = currentPage == page;
         ImGui.PushID((int)page);
 
-        using var colors = ImRaii.PushColor(ImGuiCol.Header, Accent, active)
-            .Push(ImGuiCol.HeaderHovered, active ? AccentHover : CardBgHover)
-            .Push(ImGuiCol.HeaderActive, active ? AccentActive : CardBg);
+        var rowStart = ImGui.GetCursorScreenPos();
+        var rowSize = new Vector2(ImGui.GetContentRegionAvail().X, 34);
+        var drawList = ImGui.GetWindowDrawList();
 
-        if (ImGui.Selectable("##navrow", active, ImGuiSelectableFlags.None, new Vector2(-1, 34)))
+        var clicked = ImGui.InvisibleButton("##navrow", rowSize);
+        var hovered = ImGui.IsItemHovered();
+
+        if (active)
         {
-            currentPage = page;
+            drawList.AddRectFilled(rowStart, rowStart + rowSize, ImGui.GetColorU32(Accent), 8f);
+        }
+        else if (hovered)
+        {
+            drawList.AddRectFilled(rowStart, rowStart + rowSize, ImGui.GetColorU32(CardBgHover), 8f);
         }
 
         // AddText takes the font pointer directly - no need to push it onto the ImGui font stack
         // first, unlike every other icon usage in this file (IconButton etc.) that draws through
         // normal ImGui widgets instead of the draw list.
-        var rowMin = ImGui.GetItemRectMin();
         var textColor = active ? Vector4.One : MutedText;
-        var drawList = ImGui.GetWindowDrawList();
-        drawList.AddText(UiBuilder.IconFont, ImGui.GetFontSize(), rowMin + new Vector2(12, 9),
+        drawList.AddText(UiBuilder.IconFont, ImGui.GetFontSize(), rowStart + new Vector2(12, 9),
             ImGui.GetColorU32(textColor), icon.ToIconString());
-        drawList.AddText(rowMin + new Vector2(38, 9), ImGui.GetColorU32(textColor), label);
+        drawList.AddText(rowStart + new Vector2(38, 9), ImGui.GetColorU32(textColor), label);
 
         ImGui.PopID();
+
+        if (clicked)
+        {
+            currentPage = page;
+        }
     }
 
     private void DrawWatchingStat()
