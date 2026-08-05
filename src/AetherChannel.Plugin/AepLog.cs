@@ -1,0 +1,14 @@
+namespace AetherChannel.Plugin;
+
+internal static class AepLog
+{
+    public static void Verbose(string message) => Plugin.Log.Verbose(message);
+
+    public static void Debug(string message) => Plugin.Log.Debug(message);
+
+    public static void Info(string message) => Plugin.Log.Information(message);
+
+    public static void Warning(string message) => Plugin.Log.Warning(message);
+
+    public static void Error(string message) => Plugin.Log.Error(message);
+}

@@ -1,0 +1,29 @@
+services:
+  aetherchannel-server:
+    build:
+      context: .
+      dockerfile: src/AetherChannel.Server/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "5000"
+    environment:
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - RELAY_DOMAIN=${RELAY_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - aetherchannel-server
+
+volumes:
+  caddy_data:
+  caddy_config:

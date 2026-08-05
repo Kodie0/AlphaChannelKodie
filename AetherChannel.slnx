@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AetherChannel.Contracts/AetherChannel.Contracts.csproj" />
+    <Project Path="src/AetherChannel.Plugin/AetherChannel.Plugin.csproj" />
+    <Project Path="src/AetherChannel.Server/AetherChannel.Server.csproj" />
+  </Folder>
+</Solution>
