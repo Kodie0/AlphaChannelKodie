@@ -1,5 +1,7 @@
 # AlphaChannel
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/alphachannel)
+
 A Dalamud plugin that renders a real, movable video screen in the world and keeps it in sync
 across everyone watching, so you and your friends can watch something together in-game.
 
@@ -52,9 +54,6 @@ a display name (defaults to your character name).
 - Auto-pause during combat/cutscenes
 - Emoji reactions that animate on the in-world screen itself
 - Saveable screen position presets
-
-If you'd like to support development, there's a Ko-fi link at the bottom of the plugin window
-(also at [ko-fi.com/alphachannel](https://ko-fi.com/alphachannel)).
 
 ## Self-hosting the relay
 
