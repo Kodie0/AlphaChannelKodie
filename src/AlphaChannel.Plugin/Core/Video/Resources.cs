@@ -94,16 +94,20 @@ internal sealed class Resources : IDisposable
 
 	internal string? GetLocationMPV()
 	{
-		string filenameStart = "mpv-dev-lgpl-x86_64-";
-		string? dir = Directory.GetDirectories(_configDir, $"{filenameStart}*").FirstOrDefault();
-		if (dir != null)
+		const string filenameStart = "mpv-dev-lgpl-x86_64-";
+		// Prefer the newest extracted build (name embeds the GitHub release id). Leaving older
+		// folders behind is intentional when libmpv is still loaded and can't be deleted yet.
+		foreach (var dir in Directory.GetDirectories(_configDir, $"{filenameStart}*")
+			         .OrderByDescending(d => d, StringComparer.Ordinal))
 		{
-			return dir + "/libmpv-2.dll";
+			var dll = Path.Combine(dir, "libmpv-2.dll");
+			if (File.Exists(dll))
+			{
+				return dll;
+			}
 		}
-		else
-		{
-			return null;
-		}
+
+		return null;
 	}
 
 	internal string? GetLocationYTDLP()
@@ -212,7 +216,7 @@ internal sealed class Resources : IDisposable
 			}
 
 			string downloadURL = asset["browser_download_url"]!.Value<string>()!;
-			AepLog.Warning("Found Update: " + downloadURL);
+			AepLog.Info("Found Update: " + downloadURL);
 			return [downloadURL, folderName];
 		}
 		catch (Exception exception)
@@ -236,13 +240,23 @@ internal sealed class Resources : IDisposable
 			AepLog.Debug("Finished Downloading " + downloadURL);
 			if (nameEndsWith == ".7z")
 			{
-				string localFolder = Path.Combine(configDir, Path.GetRandomFileName());
-				Directory.CreateDirectory(localFolder);
+				string targetFolder = Path.Combine(configDir, folderName);
+				if (Directory.Exists(targetFolder))
+				{
+					File.Delete(tempFile);
+					TryDeleteOldVersionFolders(configDir, nameStartsWith, keepFolder: targetFolder);
+					return true;
+				}
+
+				// Extract into a temp dir, then rename into place — never delete the currently-loaded
+				// libmpv folder first (that throws Access Denied under Wine while the DLL is mapped).
+				string extractFolder = Path.Combine(configDir, Path.GetRandomFileName());
+				Directory.CreateDirectory(extractFolder);
 				using (var archive = ArchiveFactory.OpenArchive(tempFile))
 				{
 					foreach (var entry in archive.Entries.Where(e => !e.IsDirectory))
 					{
-						entry.WriteToDirectory(localFolder, new ExtractionOptions
+						entry.WriteToDirectory(extractFolder, new ExtractionOptions
 						{
 							ExtractFullPath = true,
 							Overwrite = true
@@ -251,47 +265,48 @@ internal sealed class Resources : IDisposable
 				}
 
 				File.Delete(tempFile);
-
-				foreach (string dir in Directory.GetDirectories(configDir, $"{nameStartsWith}*"))
-				{
-					Directory.Delete(dir, recursive: true);
-				}
-
-				if (Directory.Exists(Path.Combine(configDir, folderName))) //Super weird but lets just do this to be safe
-				{
-					foreach (string file in Directory.GetFiles(localFolder, "*", SearchOption.AllDirectories))
-					{
-						string relative = Path.GetRelativePath(localFolder, file);
-						string target = Path.Combine(Path.Combine(configDir, folderName), relative);
-						Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-						File.Copy(file, target, overwrite: true);
-					}
-				}
-				else
-				{
-					Directory.Move(localFolder, Path.Combine(configDir, folderName));
-				}
+				Directory.Move(extractFolder, targetFolder);
+				TryDeleteOldVersionFolders(configDir, nameStartsWith, keepFolder: targetFolder);
 			}
 			else
 			{
-				foreach (string dir in Directory.GetDirectories(configDir, $"{nameStartsWith}*"))
-				{
-					Directory.Delete(dir, recursive: true);
-				}
-
 				string localFolder = Path.Combine(configDir, folderName);
 				Directory.CreateDirectory(localFolder);
 
 				string targetPath = Path.Combine(localFolder, nameStartsWith.EndsWith(nameEndsWith, StringComparison.Ordinal) ? nameStartsWith : nameStartsWith + nameEndsWith);
 				File.Copy(tempFile, targetPath, overwrite: true);
 				File.Delete(tempFile);
+				TryDeleteOldVersionFolders(configDir, nameStartsWith, keepFolder: localFolder);
 			}
 			return true;
 		}
 		catch (Exception e)
 		{
-			AepLog.Error($"Error updating {nameStartsWith}: {e.Message} {e.StackTrace}");
+			AepLog.Error($"Error updating {nameStartsWith}: {e.Message}");
 			return false;
+		}
+	}
+
+	// Best-effort cleanup. libmpv-2.dll stays mapped for the whole process lifetime, so the folder
+	// that supplied the current handle often can't be removed until the next full game restart —
+	// leave it and prefer the newest folder in GetLocationMPV instead of failing the whole update.
+	private static void TryDeleteOldVersionFolders(string configDir, string nameStartsWith, string keepFolder)
+	{
+		foreach (string dir in Directory.GetDirectories(configDir, $"{nameStartsWith}*"))
+		{
+			if (string.Equals(Path.GetFullPath(dir), Path.GetFullPath(keepFolder), StringComparison.OrdinalIgnoreCase))
+			{
+				continue;
+			}
+
+			try
+			{
+				Directory.Delete(dir, recursive: true);
+			}
+			catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+			{
+				AepLog.Warning($"Leaving old {nameStartsWith} folder in place (still in use): {Path.GetFileName(dir)}");
+			}
 		}
 	}
 

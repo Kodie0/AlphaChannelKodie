@@ -7,28 +7,29 @@ namespace AlphaChannel.Plugin.Crypto;
 // Configuration.DmPrivateKeys (DPAPI-protected on Windows), uploads the public half to the server,
 // and caches other accounts' public keys fetched during a session (their public keys aren't
 // sensitive, no need to persist them locally - refetching is cheap and always current).
+//
+// Key material is handled by BouncyCastle (see DmCipher) so Wine/CNG's broken P-521 path isn't used.
 internal sealed class KeyVault(Configuration configuration, KeysClient keysClient)
 {
-    private readonly Dictionary<string, ECDiffieHellman> identityCache = new();
-    private readonly Dictionary<string, ECDiffieHellman> otherPartyCache = new();
+    private readonly Dictionary<string, DmIdentity> identityCache = new();
+    private readonly Dictionary<string, DmPublicKey> otherPartyCache = new();
 
-    internal async Task<ECDiffieHellman> EnsureIdentityAsync(string accountId, string bearerToken)
+    internal async Task<DmIdentity> EnsureIdentityAsync(string accountId, string bearerToken)
     {
         if (identityCache.TryGetValue(accountId, out var cached))
         {
             return cached;
         }
 
-        ECDiffieHellman key;
+        DmIdentity key;
         if (configuration.DmPrivateKeys.TryGetValue(accountId, out var storedBase64))
         {
-            key = ECDiffieHellman.Create();
-            key.ImportPkcs8PrivateKey(Unprotect(Convert.FromBase64String(storedBase64)), out _);
+            key = DmCipher.ImportPrivateKey(Unprotect(Convert.FromBase64String(storedBase64)));
         }
         else
         {
             key = DmCipher.GenerateIdentity();
-            configuration.DmPrivateKeys[accountId] = Convert.ToBase64String(Protect(key.ExportPkcs8PrivateKey()));
+            configuration.DmPrivateKeys[accountId] = Convert.ToBase64String(Protect(DmCipher.ExportPrivateKey(key)));
             configuration.Save();
 
             var publicKeyBase64 = Convert.ToBase64String(DmCipher.ExportPublicKey(key));
@@ -39,7 +40,7 @@ internal sealed class KeyVault(Configuration configuration, KeysClient keysClien
         return key;
     }
 
-    internal async Task<ECDiffieHellman?> GetOtherPartyKeyAsync(string otherAccountId, string bearerToken)
+    internal async Task<DmPublicKey?> GetOtherPartyKeyAsync(string otherAccountId, string bearerToken)
     {
         if (otherPartyCache.TryGetValue(otherAccountId, out var cached))
         {
@@ -70,6 +71,12 @@ internal sealed class KeyVault(Configuration configuration, KeysClient keysClien
         }
         catch (PlatformNotSupportedException)
         {
+            return data;
+        }
+        catch (CryptographicException)
+        {
+            // Wine often rejects DPAPI even when the API surface exists - store raw PKCS8 rather
+            // than failing key creation entirely.
             return data;
         }
     }

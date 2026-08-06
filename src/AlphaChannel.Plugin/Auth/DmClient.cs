@@ -13,12 +13,14 @@ internal sealed class DmClient(Configuration configuration)
         return http;
     }
 
-    internal async Task<string?> StartConversationAsync(string bearerToken, string otherAccountId)
+    // One member = 1:1 (resumes the existing conversation with that pair if there is one); two or
+    // more always creates a new group - see DmService.CreateConversationAsync's own doc comment.
+    internal async Task<string?> CreateConversationAsync(string bearerToken, string[] memberAccountIds, string? name = null)
     {
         using var http = Http(bearerToken);
         try
         {
-            var response = await http.PostAsync($"/dm/conversations/{otherAccountId}", null).ConfigureAwait(false);
+            var response = await http.PostAsJsonAsync("/dm/conversations", new CreateConversationRequest(memberAccountIds, name)).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return null;
@@ -29,7 +31,7 @@ internal sealed class DmClient(Configuration configuration)
         }
         catch (Exception exception)
         {
-            AepLog.Warning($"[Dm] start conversation failed: {exception.Message}");
+            AepLog.Warning($"[Dm] create conversation failed: {exception.Message}");
             return null;
         }
     }

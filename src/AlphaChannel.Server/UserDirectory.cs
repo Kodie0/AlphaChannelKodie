@@ -16,6 +16,12 @@ internal sealed class UserDirectory
 
     public void Disconnected(string userId) => sockets.TryRemove(userId, out _);
 
+    // Live count of AlphaChannel clients currently on the /rt socket — drives the sidebar/Home
+    // "users online" chip next to friends-online.
+    public int OnlineCount => sockets.Count;
+
+    public IEnumerable<WebSocket> ConnectedSockets() => sockets.Values;
+
     public void SetDisplayName(string userId, string displayName) => displayNames[userId] = displayName;
 
     public string DisplayNameOrFallback(string userId) => displayNames.GetValueOrDefault(userId, userId);

@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using AlphaChannel.Contracts;
 using AlphaChannel.Plugin.Video;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Utility.Raii;
 
 namespace AlphaChannel.Plugin;
 
@@ -23,34 +25,62 @@ internal sealed partial class MainWindow
     private volatile TwitchStreamInfo? twitchResult;
     private volatile string? twitchError;
 
+    private bool trendingDirty = true;
+    private TwitchStreamDto[] trendingStreams = [];
+
+    // Manual YouTube/Twitch switch — Home tiles set pendingSearchTab; avoid ImGui TabBar SetSelected.
+    private int searchTab;
+
     private void DrawSearch()
     {
-        if (!ImGui.BeginTabBar("##searchTabs"))
+        if (pendingSearchTab == "YouTube")
         {
-            return;
+            searchTab = 0;
+            pendingSearchTab = null;
+        }
+        else if (pendingSearchTab == "Twitch")
+        {
+            searchTab = 1;
+            pendingSearchTab = null;
         }
 
-        if (ImGui.BeginTabItem("YouTube"))
+        DrawSearchTabButton("YouTube", 0);
+        ImGui.SameLine();
+        DrawSearchTabButton("Twitch", 1);
+
+        ImGui.Spacing();
+        ImGui.Spacing();
+
+        if (searchTab == 0)
         {
-            ImGui.Spacing();
             DrawYouTubeSearch();
-            ImGui.EndTabItem();
         }
-
-        if (ImGui.BeginTabItem("Twitch"))
+        else
         {
-            ImGui.Spacing();
             DrawTwitchCheck();
-            ImGui.EndTabItem();
         }
+    }
 
-        ImGui.EndTabBar();
+    private void DrawSearchTabButton(string label, int tab)
+    {
+        var selected = searchTab == tab;
+        using (ImRaii.PushColor(ImGuiCol.Button, selected ? Accent : CardBg)
+                   .Push(ImGuiCol.ButtonHovered, selected ? AccentHover : CardBgHover)
+                   .Push(ImGuiCol.ButtonActive, selected ? AccentActive : CardBgHover)
+                   .Push(ImGuiCol.Text, selected ? Vector4.One : MutedText))
+        {
+            if (ImGui.Button(label, new Vector2(110, 30)))
+            {
+                searchTab = tab;
+            }
+        }
     }
 
     private void DrawYouTubeSearch()
     {
+        ImGui.TextColored(MutedText, "Search YouTube");
         ImGui.SetNextItemWidth(-40f);
-        var submitted = ImGui.InputTextWithHint("##search", "Search query", ref searchQuery, 200,
+        var submitted = ImGui.InputTextWithHint("##search", "Search query…", ref searchQuery, 200,
             ImGuiInputTextFlags.EnterReturnsTrue);
         ImGui.SameLine();
         var clicked = IconButton(FontAwesomeIcon.Search);
@@ -71,7 +101,6 @@ internal sealed partial class MainWindow
         }
 
         ImGui.Spacing();
-        ImGui.Separator();
         ImGui.Spacing();
         SectionHeader($"Results ({results.Count})");
 
@@ -108,11 +137,6 @@ internal sealed partial class MainWindow
             {
                 queue.Add(new VideoQueueEntry(result.Url, result.Title, result.ChannelName, result.Duration,
                     result.ThumbnailUrl));
-            }
-
-            if (index < results.Count - 1)
-            {
-                ImGui.Separator();
             }
 
             ImGui.PopID();
@@ -218,12 +242,68 @@ internal sealed partial class MainWindow
         }
     }
 
+    // Real trending data via Twitch's own Helix API (server-side, see Server/Twitch), not scraping.
+    private void DrawTwitchTrending()
+    {
+        SectionHeader("Trending on Twitch");
+
+        if (CurrentSession is not { } session)
+        {
+            ImGui.TextColored(MutedText, "Sign in to see trending streams.");
+            return;
+        }
+
+        if (trendingDirty)
+        {
+            trendingDirty = false;
+            var token = session.Token;
+            _ = Task.Run(async () => trendingStreams = await twitchClient.GetTrendingAsync(token));
+        }
+
+        if (ImGui.SmallButton("Refresh"))
+        {
+            trendingDirty = true;
+        }
+
+        if (trendingStreams.Length == 0)
+        {
+            ImGui.TextDisabled("Nothing trending right now.");
+            return;
+        }
+
+        foreach (var stream in trendingStreams)
+        {
+            ImGui.PushID(stream.ChannelName);
+            var thumbnail = thumbnails.Get(stream.ThumbnailUrl);
+            if (thumbnail is not null)
+            {
+                var width = QueueThumbnailHeight * thumbnail.Width / MathF.Max(thumbnail.Height, 1);
+                ImGui.Image(thumbnail.Handle, new Vector2(width, QueueThumbnailHeight));
+                ImGui.SameLine();
+            }
+
+            ImGui.BeginGroup();
+            ImGui.TextWrapped(stream.Title);
+            ImGui.TextDisabled($"{stream.ChannelName} - {stream.GameName} - {stream.ViewerCount:N0} viewers");
+            ImGui.EndGroup();
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Play now"))
+            {
+                queue.PlayNow(new VideoQueueEntry(stream.Url, stream.Title, stream.ChannelName, null, stream.ThumbnailUrl));
+            }
+
+            ImGui.PopID();
+        }
+    }
+
     // Not a real search - see TwitchChannelChecker's own comment on why. Just checks whether one
     // named channel is currently live.
     private void DrawTwitchCheck()
     {
+        ImGui.TextColored(MutedText, "Look up a Twitch channel");
         ImGui.SetNextItemWidth(-70f);
-        var submitted = ImGui.InputTextWithHint("##twitchChannel", "Twitch channel name", ref twitchChannelInput, 64,
+        var submitted = ImGui.InputTextWithHint("##twitchChannel", "Twitch channel name…", ref twitchChannelInput, 64,
             ImGuiInputTextFlags.EnterReturnsTrue);
         ImGui.SameLine();
         var clicked = ImGui.Button("Check");
@@ -235,7 +315,7 @@ internal sealed partial class MainWindow
             _ = RunTwitchCheckAsync(twitchChannelInput.Trim());
         }
 
-        ImGui.TextDisabled("Not a search - checks whether one named channel is live right now.");
+        ImGui.TextDisabled("Checks whether one named channel is live right now.");
 
         if (isCheckingTwitch)
         {
@@ -247,39 +327,40 @@ internal sealed partial class MainWindow
             ImGui.TextColored(Danger, error);
         }
 
-        if (twitchResult is not { } stream)
+        if (twitchResult is { } stream)
         {
-            return;
-        }
+            ImGui.Spacing();
+            ImGui.Spacing();
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+            var thumbnail = thumbnails.Get(stream.ThumbnailUrl);
+            if (thumbnail is not null)
+            {
+                var width = QueueThumbnailHeight * thumbnail.Width / MathF.Max(thumbnail.Height, 1);
+                ImGui.Image(thumbnail.Handle, new Vector2(width, QueueThumbnailHeight));
+                ImGui.SameLine();
+            }
 
-        var thumbnail = thumbnails.Get(stream.ThumbnailUrl);
-        if (thumbnail is not null)
-        {
-            var width = QueueThumbnailHeight * thumbnail.Width / MathF.Max(thumbnail.Height, 1);
-            ImGui.Image(thumbnail.Handle, new Vector2(width, QueueThumbnailHeight));
+            ImGui.BeginGroup();
+            ImGui.TextWrapped(stream.Title);
+            ImGui.TextDisabled($"{stream.ChannelName} - live now");
+            ImGui.EndGroup();
+
             ImGui.SameLine();
+            if (ImGui.SmallButton("Play now"))
+            {
+                queue.PlayNow(new VideoQueueEntry(stream.Url, stream.Title, stream.ChannelName, null, stream.ThumbnailUrl));
+            }
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Add"))
+            {
+                queue.Add(new VideoQueueEntry(stream.Url, stream.Title, stream.ChannelName, null, stream.ThumbnailUrl));
+            }
         }
 
-        ImGui.BeginGroup();
-        ImGui.TextWrapped(stream.Title);
-        ImGui.TextDisabled($"{stream.ChannelName} - live now");
-        ImGui.EndGroup();
-
-        ImGui.SameLine();
-        if (ImGui.SmallButton("Play now"))
-        {
-            queue.PlayNow(new VideoQueueEntry(stream.Url, stream.Title, stream.ChannelName, null, stream.ThumbnailUrl));
-        }
-
-        ImGui.SameLine();
-        if (ImGui.SmallButton("Add"))
-        {
-            queue.Add(new VideoQueueEntry(stream.Url, stream.Title, stream.ChannelName, null, stream.ThumbnailUrl));
-        }
+        ImGui.Spacing();
+        ImGui.Spacing();
+        DrawTwitchTrending();
     }
 
     private async Task RunTwitchCheckAsync(string channelName)

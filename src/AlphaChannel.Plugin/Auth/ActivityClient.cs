@@ -25,6 +25,25 @@ internal sealed class ActivityClient(Configuration configuration)
         }
     }
 
+    internal async Task<int> GetUnreadCountAsync(string bearerToken)
+    {
+        using var http = new HttpClient { BaseAddress = new Uri(configuration.RelayServerUrl) };
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        try
+        {
+            var response = await http.GetAsync("/activity/unread-count").ConfigureAwait(false);
+            var result = response.IsSuccessStatusCode
+                ? await response.Content.ReadFromJsonAsync<UnreadCountResponse>().ConfigureAwait(false)
+                : null;
+            return result?.Count ?? 0;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning($"[Activity] unread-count fetch failed: {exception.Message}");
+            return 0;
+        }
+    }
+
     internal async Task MarkReadAsync(string bearerToken, long upToUnix)
     {
         using var http = new HttpClient { BaseAddress = new Uri(configuration.RelayServerUrl) };

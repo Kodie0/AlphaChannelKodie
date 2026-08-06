@@ -12,6 +12,9 @@ internal static class ActivityEndpoints
         group.MapGet("/", async (long? before, HttpContext context, ActivityService activity, CancellationToken ct) =>
             Results.Ok(await activity.GetFeedAsync(context.GetAccount().Id, before, ct)));
 
+        group.MapGet("/unread-count", async (HttpContext context, ActivityService activity, CancellationToken ct) =>
+            Results.Ok(new UnreadCountResponse(await activity.GetUnreadCountAsync(context.GetAccount().Id, ct))));
+
         group.MapPost("/read", async (MarkActivityReadRequest request, HttpContext context, ActivityService activity, CancellationToken ct) =>
         {
             await activity.MarkReadAsync(context.GetAccount().Id, request.UpToUnix, ct);

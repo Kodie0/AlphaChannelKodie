@@ -30,9 +30,39 @@ services:
       - XIVAUTH_TOKEN_ENDPOINT=${XIVAUTH_TOKEN_ENDPOINT}
       - XIVAUTH_CHARACTERS_ENDPOINT=${XIVAUTH_CHARACTERS_ENDPOINT}
       - DISCORD_LALAFELL_WEBHOOK_URL=${DISCORD_LALAFELL_WEBHOOK_URL}
+      - RELAY_DOMAIN=${RELAY_DOMAIN}
+      - CDN_HOSTNAME=${CDN_HOSTNAME}
+      - MEDIAMTX_WEBHOOK_SECRET=${MEDIAMTX_WEBHOOK_SECRET}
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
+
+  # RTMP-in/HLS-out ingest for "Go Live" self-hosted streaming - OBS pushes here, a CDN pull zone
+  # (set up separately, see the plan doc's setup instructions) pulls HLS segments from port 8888 and
+  # serves viewers from edge, so this VM's own bandwidth scales with concurrent *streams*, not raw
+  # viewer count. Both ports are published directly on the VM rather than proxied through Caddy:
+  # RTMP has no meaningful HTTP-reverse-proxy story, and the CDN needs a stable origin URL to pull
+  # HLS from regardless of whether Caddy is involved - see Server/Live/LiveService.cs's doc comment
+  # for why the RTMP path never contains the stream secret (it travels as a query string instead),
+  # which is what keeps the public HLS path safe to hand to a CDN and to viewers.
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    restart: unless-stopped
+    ports:
+      - "1935:1935"
+      - "8888:8888"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    environment:
+      # Read by mediamtx.yml's runOnOnline/runOnOffline hook commands (shell env var expansion) so
+      # they can prove to LiveEndpoints' MediaWebhookFilter that the call actually came from this
+      # container - see LiveEndpoints.cs's comment on why /auth can't do the same (MediaMTX's own
+      # built-in authHTTPAddress call can't be given a custom header).
+      - MEDIAMTX_WEBHOOK_SECRET=${MEDIAMTX_WEBHOOK_SECRET}
+    depends_on:
+      - alphachannel-server
 
   caddy:
     image: caddy:2-alpine
@@ -49,7 +79,53 @@ services:
     depends_on:
       - alphachannel-server
 
+  # Isolated dev stack: own DB, own admin token, exposed directly on DEV_PORT with plain HTTP - no
+  # Caddy/TLS/subdomain involved, deliberately, so setting this up (or breaking it) can never touch
+  # the prod Caddy config or the ports/services above. Point a dev-build plugin's RelayServerUrl at
+  # http://<vm-ip>:${DEV_PORT} to try server changes here before they go live on prod - build+deploy
+  # against this stack, confirm it, then redeploy the same image to alphachannel-server for real.
+  postgres-dev:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${DEV_POSTGRES_USER}
+      - POSTGRES_PASSWORD=${DEV_POSTGRES_PASSWORD}
+      - POSTGRES_DB=${DEV_POSTGRES_DB}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DEV_POSTGRES_USER} -d ${DEV_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  alphachannel-server-dev:
+    build:
+      context: .
+      dockerfile: src/AlphaChannel.Server/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${DEV_PORT}:5000"
+    environment:
+      - ADMIN_TOKEN=${DEV_ADMIN_TOKEN}
+      - ConnectionStrings__AlphaChannel=Host=postgres-dev;Database=${DEV_POSTGRES_DB};Username=${DEV_POSTGRES_USER};Password=${DEV_POSTGRES_PASSWORD}
+      - XIVAUTH_CLIENT_ID=${XIVAUTH_CLIENT_ID}
+      - XIVAUTH_CLIENT_SECRET=${XIVAUTH_CLIENT_SECRET}
+      - XIVAUTH_DEVICE_ENDPOINT=${XIVAUTH_DEVICE_ENDPOINT}
+      - XIVAUTH_TOKEN_ENDPOINT=${XIVAUTH_TOKEN_ENDPOINT}
+      - XIVAUTH_CHARACTERS_ENDPOINT=${XIVAUTH_CHARACTERS_ENDPOINT}
+      - DISCORD_LALAFELL_WEBHOOK_URL=${DISCORD_LALAFELL_WEBHOOK_URL}
+      - RELAY_DOMAIN=${DEV_RELAY_DOMAIN}
+      - CDN_HOSTNAME=
+      - MEDIAMTX_WEBHOOK_SECRET=${MEDIAMTX_WEBHOOK_SECRET}
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
+    depends_on:
+      postgres-dev:
+        condition: service_healthy
+
 volumes:
   caddy_data:
   caddy_config:
   postgres_data:
+  postgres_dev_data:

@@ -9,7 +9,8 @@ internal sealed class AlphaChannelDbContext(DbContextOptions<AlphaChannelDbConte
     public DbSet<AuthToken> AuthTokens => Set<AuthToken>();
     public DbSet<Friendship> Friendships => Set<Friendship>();
     public DbSet<Block> Blocks => Set<Block>();
-    public DbSet<DmConversation> DmConversations => Set<DmConversation>();
+    public DbSet<Conversation> Conversations => Set<Conversation>();
+    public DbSet<ConversationMember> ConversationMembers => Set<ConversationMember>();
     public DbSet<DmMessage> DmMessages => Set<DmMessage>();
     public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
     public DbSet<ActivityReadMarker> ActivityReadMarkers => Set<ActivityReadMarker>();
@@ -18,6 +19,10 @@ internal sealed class AlphaChannelDbContext(DbContextOptions<AlphaChannelDbConte
     public DbSet<Post> Posts => Set<Post>();
     public DbSet<PostLike> PostLikes => Set<PostLike>();
     public DbSet<Follow> Follows => Set<Follow>();
+    public DbSet<InstalledPlugin> InstalledPlugins => Set<InstalledPlugin>();
+    public DbSet<Venue> Venues => Set<Venue>();
+    public DbSet<StreamKey> StreamKeys => Set<StreamKey>();
+    public DbSet<LiveSession> LiveSessions => Set<LiveSession>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -52,19 +57,23 @@ internal sealed class AlphaChannelDbContext(DbContextOptions<AlphaChannelDbConte
             e.HasIndex(b => new { b.BlockerAccountId, b.BlockedAccountId }).IsUnique();
         });
 
-        modelBuilder.Entity<DmConversation>(e =>
+        modelBuilder.Entity<ConversationMember>(e =>
         {
-            e.HasIndex(c => new { c.AccountAId, c.AccountBId }).IsUnique();
+            e.HasIndex(m => new { m.ConversationId, m.AccountId }).IsUnique();
+            e.HasIndex(m => m.AccountId);
         });
 
         modelBuilder.Entity<DmMessage>(e =>
         {
             e.HasIndex(m => new { m.ConversationId, m.SentAtUtc });
+            e.HasIndex(m => m.GroupId);
+            e.HasIndex(m => m.RecipientAccountId);
         });
 
         modelBuilder.Entity<ActivityEvent>(e =>
         {
             e.HasIndex(a => new { a.AccountId, a.CreatedAtUtc });
+            e.HasIndex(a => a.TargetAccountId);
         });
 
         modelBuilder.Entity<ActivityReadMarker>(e =>
@@ -80,6 +89,8 @@ internal sealed class AlphaChannelDbContext(DbContextOptions<AlphaChannelDbConte
         modelBuilder.Entity<Post>(e =>
         {
             e.HasIndex(p => new { p.AuthorAccountId, p.CreatedAtUtc });
+            e.HasIndex(p => p.ParentPostId);
+            e.HasIndex(p => p.RepostOfPostId);
         });
 
         modelBuilder.Entity<PostLike>(e =>
@@ -91,6 +102,27 @@ internal sealed class AlphaChannelDbContext(DbContextOptions<AlphaChannelDbConte
         {
             e.HasIndex(f => new { f.FollowerAccountId, f.FolloweeAccountId }).IsUnique();
             e.HasIndex(f => f.FolloweeAccountId);
+        });
+
+        modelBuilder.Entity<InstalledPlugin>(e =>
+        {
+            e.HasIndex(p => new { p.AccountId, p.InternalName }).IsUnique();
+        });
+
+        modelBuilder.Entity<Venue>(e =>
+        {
+            e.HasIndex(v => v.OwnerAccountId);
+            e.HasIndex(v => v.TerritoryTypeId);
+        });
+
+        modelBuilder.Entity<StreamKey>(e =>
+        {
+            e.HasIndex(k => k.AccountId).IsUnique();
+        });
+
+        modelBuilder.Entity<LiveSession>(e =>
+        {
+            e.HasIndex(s => new { s.AccountId, s.EndedAtUtc });
         });
 
         // Seeds the one settings row via migration data rather than app-startup logic, so it's

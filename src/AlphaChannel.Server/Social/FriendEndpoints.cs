@@ -9,15 +9,30 @@ internal static class FriendEndpoints
     {
         var group = app.MapGroup("/").AddEndpointFilter<AccountAuthFilter>().AddEndpointFilter<LalafellGateFilter>();
 
-        // The only account lookup endpoint anywhere - exact-handle match only, no search/browse/
-        // autocomplete. See AccountAuthFilter's AddEndpointFilter above: this still requires being
-        // signed in yourself, it's just not restricted to already-friends the way /friends is.
+        // Exact-match lookup on the chosen DisplayName (case-insensitive) - used by the request-
+        // sending path itself (SendRequestAsync does its own separate lookup, this endpoint is for
+        // callers that just want to resolve a name). See AccountAuthFilter's AddEndpointFilter
+        // above: this still requires being signed in yourself, it's just not restricted to
+        // already-friends the way /friends is. Route name kept as "by-handle" for now even though
+        // the lookup key is DisplayName, to avoid also having to bump every client.
         group.MapGet("/accounts/by-handle/{handle}", async (string handle, HttpContext context, FriendService friends, CancellationToken ct) =>
         {
-            var account = await friends.FindAccountByHandleAsync(handle, context.GetAccount().Id, ct);
+            var account = await friends.FindAccountByDisplayNameAsync(handle, context.GetAccount().Id, ct);
             return account is null
                 ? Results.NotFound()
                 : Results.Ok(new AccountSummaryDto(account.Id.ToString(), account.Handle, account.DisplayName));
+        });
+
+        // Live search-as-you-type for the Friends page - prefix match, small result cap, see
+        // FriendService.SearchByDisplayNamePrefixAsync. "q" query param stays short since this fires
+        // on every keystroke.
+        group.MapGet("/friends/search", async (string? q, HttpContext context, FriendService friends, CancellationToken ct) =>
+            Results.Ok(await friends.SearchByDisplayNamePrefixAsync(context.GetAccount().Id, q ?? string.Empty, ct)));
+
+        group.MapGet("/accounts/{id:guid}/profile", async (Guid id, HttpContext context, FriendService friends, CancellationToken ct) =>
+        {
+            var profile = await friends.GetProfileAsync(context.GetAccount().Id, id, ct);
+            return profile is null ? Results.NotFound() : Results.Ok(profile);
         });
 
         group.MapGet("/friends", async (HttpContext context, FriendService friends, CancellationToken ct) =>
@@ -28,11 +43,36 @@ internal static class FriendEndpoints
 
         group.MapPost("/friends/requests", async (SendFriendRequestRequest request, HttpContext context, FriendService friends, CancellationToken ct) =>
         {
-            var result = await friends.SendRequestAsync(context.GetAccount().Id, request.Handle, ct);
+            var result = await friends.SendRequestAsync(context.GetAccount().Id, request.DisplayName, ct);
             return result switch
             {
                 SendFriendRequestResult.Sent => Results.Created(),
                 SendFriendRequestResult.NotFound => Results.NotFound(),
+                _ => Results.Conflict(),
+            };
+        });
+
+        // Right-click "Add Friend" in-game (Plugin.cs's OnMenuOpened) - see FriendService.
+        // SendRequestByCharacterAsync for why this resolves by character identity instead of name.
+        group.MapPost("/friends/requests/by-character", async (SendFriendRequestByCharacterRequest request, HttpContext context, FriendService friends, CancellationToken ct) =>
+        {
+            var result = await friends.SendRequestByCharacterAsync(context.GetAccount().Id, request.CharacterName, request.World, ct);
+            return result switch
+            {
+                SendFriendRequestResult.Sent => Results.Created(),
+                SendFriendRequestResult.NotFound => Results.NotFound(),
+                _ => Results.Conflict(),
+            };
+        });
+
+        group.MapPost("/friends/invite/redeem", async (RedeemInviteCodeRequest request, HttpContext context, FriendService friends, CancellationToken ct) =>
+        {
+            var result = await friends.RedeemInviteCodeAsync(context.GetAccount().Id, request.InviteCode, ct);
+            return result switch
+            {
+                RedeemInviteCodeResult.Friended => Results.Ok(),
+                RedeemInviteCodeResult.NotFound => Results.NotFound(),
+                RedeemInviteCodeResult.Self => Results.BadRequest(),
                 _ => Results.Conflict(),
             };
         });

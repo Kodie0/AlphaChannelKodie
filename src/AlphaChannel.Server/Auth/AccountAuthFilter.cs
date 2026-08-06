@@ -20,6 +20,7 @@ internal sealed class AccountAuthFilter(AccountService accounts) : IEndpointFilt
         var account = await accounts.ValidateTokenAsync(token, context.HttpContext.RequestAborted);
         if (account is null)
         {
+            Console.Error.WriteLine($"[FriendDiag] {context.HttpContext.Request.Path} 401: token invalid/expired/banned (tokenPrefix={token[..Math.Min(8, token.Length)]}...)");
             return TypedResults.Unauthorized();
         }
 

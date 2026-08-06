@@ -1,9 +1,12 @@
 using AlphaChannel.Plugin.Video;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Utility.Raii;
 
 namespace AlphaChannel.Plugin;
 
+// Player is the transport deck — stage for what's on screen, then a flat URL strip and lists.
+// Not a stack of identical cards; the stage is the identity.
 internal sealed partial class MainWindow
 {
     private string urlInput = string.Empty;
@@ -19,74 +22,72 @@ internal sealed partial class MainWindow
     {
         var (position, duration, isPaused) = video.GetProgress();
 
-        // Now-playing status first - the thing you actually glance at, above the controls that
-        // change it.
-        if (queue.Current is { } current)
+        DrawStage("##nowPlaying", () =>
         {
-            ImGui.TextWrapped(current.Title);
-        }
-        else
-        {
-            ImGui.TextDisabled("Nothing playing.");
-        }
+            if (queue.Current is { } current)
+            {
+                ImGui.TextColored(Accent, "NOW PLAYING");
+                ImGui.SetWindowFontScale(1.25f);
+                ImGui.TextWrapped(current.Title);
+                ImGui.SetWindowFontScale(1f);
+            }
+            else
+            {
+                ImGui.TextColored(MutedText, "Nothing playing");
+                ImGui.TextWrapped("Paste a YouTube/Twitch link below, or search under Find a video.");
+            }
 
-        if (!seekDragging)
-        {
-            seekPreview = position;
-        }
+            if (!seekDragging)
+            {
+                seekPreview = position;
+            }
 
-        ImGui.SetNextItemWidth(-1f);
-        ImGui.SliderFloat("##seek", ref seekPreview, 0f, MathF.Max(duration, 0.01f), "");
-        seekDragging = ImGui.IsItemActive();
-        if (ImGui.IsItemDeactivatedAfterEdit())
-        {
-            video.Seek(seekPreview);
-        }
+            ImGui.Spacing();
+            ImGui.SetNextItemWidth(-1f);
+            ImGui.SliderFloat("##seek", ref seekPreview, 0f, MathF.Max(duration, 0.01f), "");
+            seekDragging = ImGui.IsItemActive();
+            if (ImGui.IsItemDeactivatedAfterEdit())
+            {
+                video.Seek(seekPreview);
+            }
 
-        var (streamWidth, streamHeight) = video.GetResolution();
-        var timeText = $"{FormatTime(position)} / {FormatTime(duration)}";
-        ImGui.TextDisabled(streamWidth > 0 && streamHeight > 0
-            ? $"{timeText}  -  {streamWidth}x{streamHeight}"
-            : timeText);
+            var (streamWidth, streamHeight) = video.GetResolution();
+            var timeText = $"{FormatTime(position)} / {FormatTime(duration)}";
+            ImGui.TextColored(MutedText, streamWidth > 0 && streamHeight > 0
+                ? $"{timeText}  ·  {streamWidth}x{streamHeight}"
+                : timeText);
 
-        if (video.LastError is { } error)
-        {
-            ImGui.TextColored(Danger, error);
-        }
+            if (video.LastError is { } error)
+            {
+                ImGui.TextColored(Danger, error);
+            }
 
-        ImGui.Spacing();
+            ImGui.Spacing();
 
-        if (IconButton(isPaused ? FontAwesomeIcon.Play : FontAwesomeIcon.Pause))
-        {
-            video.Pause(!isPaused);
-        }
+            if (IconButton(isPaused ? FontAwesomeIcon.Play : FontAwesomeIcon.Pause))
+            {
+                video.Pause(!isPaused);
+            }
 
-        ImGui.SameLine();
-        if (IconButton(FontAwesomeIcon.Forward))
-        {
-            queue.Advance();
-        }
+            ImGui.SameLine();
+            if (IconButton(FontAwesomeIcon.Forward))
+            {
+                queue.Advance();
+            }
 
-        ImGui.SameLine();
-        DrawVolumeControl();
+            ImGui.SameLine();
+            DrawVolumeControl();
 
-        ImGui.SameLine();
-        if (IconButton(FontAwesomeIcon.PowerOff))
-        {
-            // Deliberately queue.Clear(), not video.Pause/Stop directly - Clear() is the one path
-            // that actually deactivates the in-world screen (makes it disappear) rather than just
-            // freezing it on the last frame, which is what a bare Stop leaves behind (see
-            // AetherStreamQueue.Advance's own comment on why that's the deliberate idle behavior).
-            queue.Clear();
-        }
+            ImGui.SameLine();
+            if (IconButton(FontAwesomeIcon.PowerOff))
+            {
+                queue.Clear();
+            }
+        });
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        SectionHeader("Play something");
-
+        ImGui.TextColored(MutedText, "Paste a link");
         ImGui.SetNextItemWidth(-70f);
-        var submittedUrl = ImGui.InputTextWithHint("##url", "Video URL", ref urlInput, 2000,
+        var submittedUrl = ImGui.InputTextWithHint("##url", "https://…", ref urlInput, 2000,
             ImGuiInputTextFlags.EnterReturnsTrue);
         ImGui.SameLine();
         if (ImGui.Button("Paste"))
@@ -98,7 +99,7 @@ internal sealed partial class MainWindow
             }
         }
 
-        var playNowClicked = ImGui.Button("Play now");
+        var playNowClicked = ImGui.Button("Play now", new Vector2(120, 30));
         if ((submittedUrl || playNowClicked) && urlInput.Length > 0)
         {
             queue.PlayNow(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
@@ -106,11 +107,13 @@ internal sealed partial class MainWindow
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Add to queue") && urlInput.Length > 0)
+        if (ImGui.Button("Add to queue", new Vector2(120, 30)) && urlInput.Length > 0)
         {
             queue.Add(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
             urlInput = string.Empty;
         }
+
+        ImGui.Spacing();
     }
 
     private void DrawVolumeControl()

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using AlphaChannel.Contracts;
 using AlphaChannel.Server.Data;
 using Microsoft.EntityFrameworkCore;
@@ -12,19 +13,34 @@ internal enum SendFriendRequestResult
     AlreadyPending,
 }
 
+internal enum RedeemInviteCodeResult
+{
+    Friended,
+    NotFound,
+    AlreadyFriends,
+    Self,
+}
+
 // IDbContextFactory rather than a plain DbContext, matching AccountService's reasoning - this
 // service pushes over sockets via UserDirectory too, and staying consistent means it's safe to
 // call from a future singleton (e.g. PresenceService) without a rewrite.
 internal sealed class FriendService(
-    IDbContextFactory<AlphaChannelDbContext> dbFactory, UserDirectory directory, RoomManager rooms, ActivityService activity)
+    IDbContextFactory<AlphaChannelDbContext> dbFactory, UserDirectory directory, RoomManager rooms,
+    ActivityService activity, Live.LiveDirectory liveDirectory)
 {
-    // Deliberately returns the same "not found" for a genuinely-missing handle, a blocked account,
+    // Deliberately returns the same "not found" for a genuinely-missing name, a blocked account,
     // and (per the Lalafell visibility preference) a Lalafell account this caller has opted not to
-    // see - none of those should be distinguishable from probing handles.
-    public async Task<Account?> FindAccountByHandleAsync(string handle, Guid callerAccountId, CancellationToken cancellationToken)
+    // see - none of those should be distinguishable from probing names.
+    //
+    // Looks up by DisplayName (the chosen "gamer tag" from onboarding), not Handle - Handle is
+    // still the immutable random internal id, but nobody can remember or share it, which was making
+    // add-a-friend unusable in practice. DisplayName is now unique (see AccountService.
+    // UpdateProfileAsync) specifically so this lookup stays unambiguous.
+    public async Task<Account?> FindAccountByDisplayNameAsync(string displayName, Guid callerAccountId, CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var account = await db.Accounts.FirstOrDefaultAsync(a => a.Handle == handle, cancellationToken);
+        var normalizedName = displayName.Trim().ToLowerInvariant();
+        var account = await db.Accounts.FirstOrDefaultAsync(a => a.DisplayName.ToLower() == normalizedName, cancellationToken);
         if (account is null)
         {
             return null;
@@ -39,6 +55,46 @@ internal sealed class FriendService(
         var settings = await GetSettingsAsync(db, cancellationToken);
         return LalafellVisibility.IsHiddenFrom(caller, account, settings) ? null : account;
     }
+
+    // Self always visible; anyone else only if there's an accepted friendship (same bar as DMs -
+    // see DmService.StartConversationAsync). Null (not a 404-shaped "empty profile") lets the
+    // endpoint return 404, indistinguishable from "no such account" - same anti-probing posture as
+    // FindAccountByDisplayNameAsync above.
+    public async Task<AccountProfileDto?> GetProfileAsync(Guid viewerId, Guid targetId, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var target = await db.Accounts.FirstOrDefaultAsync(a => a.Id == targetId, cancellationToken);
+        if (target is null)
+        {
+            return null;
+        }
+
+        if (viewerId == targetId)
+        {
+            return ToProfileDto(target, null);
+        }
+
+        var friendship = await db.Friendships.FirstOrDefaultAsync(f =>
+            f.Status == FriendshipStatus.Accepted &&
+            ((f.RequesterAccountId == viewerId && f.AddresseeAccountId == targetId) ||
+             (f.RequesterAccountId == targetId && f.AddresseeAccountId == viewerId)), cancellationToken);
+        if (friendship is null)
+        {
+            return null;
+        }
+
+        var caller = await db.Accounts.FirstAsync(a => a.Id == viewerId, cancellationToken);
+        var settings = await GetSettingsAsync(db, cancellationToken);
+        if (LalafellVisibility.IsHiddenFrom(caller, target, settings))
+        {
+            return null;
+        }
+
+        return ToProfileDto(target, ToUnixSeconds(friendship.RespondedAtUtc ?? friendship.CreatedAtUtc));
+    }
+
+    private static AccountProfileDto ToProfileDto(Account a, long? friendsSinceUnix) => new(
+        a.Id.ToString(), a.Handle, a.DisplayName, a.AvatarIcon, a.AvatarColorHex, a.Bio, a.StatusMessage, friendsSinceUnix);
 
     public async Task<List<FriendDto>> GetFriendsAsync(Guid accountId, CancellationToken cancellationToken)
     {
@@ -59,7 +115,8 @@ internal sealed class FriendService(
             .Where(a => !LalafellVisibility.IsHiddenFrom(caller, a, settings))
             .Select(a => new FriendDto(a.Id.ToString(), a.Handle, a.DisplayName,
                 directory.TryGetSocket(a.Id.ToString(), out _),
-                PresenceLabels.WatchingLabel(a.Id.ToString(), rooms, directory)))
+                PresenceLabels.WatchingLabel(a.Id.ToString(), rooms, directory, liveDirectory),
+                a.AvatarIcon, a.AvatarColorHex, a.StatusMessage))
             .ToList();
     }
 
@@ -93,10 +150,89 @@ internal sealed class FriendService(
             outgoing.Select(MapOutgoing).OfType<FriendRequestDto>().ToArray());
     }
 
-    public async Task<SendFriendRequestResult> SendRequestAsync(Guid requesterId, string recipientHandle, CancellationToken cancellationToken)
+    private const int SearchResultLimit = 8;
+
+    // Backs live search-as-you-type on the Friends page (as opposed to FindAccountByDisplayNameAsync,
+    // an exact-match lookup used by the request-sending path itself) - a prefix match against
+    // DisplayName only, same visibility/blocking rules as everywhere else, capped small since this
+    // fires on every keystroke.
+    public async Task<List<FriendSearchResultDto>> SearchByDisplayNamePrefixAsync(
+        Guid callerId, string query, CancellationToken cancellationToken)
+    {
+        var normalizedQuery = query.Trim().ToLowerInvariant();
+        if (normalizedQuery.Length < DisplayNameRules.MinLength)
+        {
+            return [];
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var matches = await db.Accounts
+            .Where(a => a.Id != callerId && a.DisplayName.ToLower().StartsWith(normalizedQuery))
+            .OrderBy(a => a.DisplayName)
+            .Take(SearchResultLimit * 2) // headroom for post-filtering below before capping to SearchResultLimit
+            .ToListAsync(cancellationToken);
+
+        if (matches.Count == 0)
+        {
+            return [];
+        }
+
+        var caller = await db.Accounts.FirstAsync(a => a.Id == callerId, cancellationToken);
+        var settings = await GetSettingsAsync(db, cancellationToken);
+        var matchIds = matches.Select(a => a.Id).ToList();
+        var blockedIds = (await db.Blocks
+                .Where(b => (b.BlockerAccountId == callerId && matchIds.Contains(b.BlockedAccountId)) ||
+                            (b.BlockedAccountId == callerId && matchIds.Contains(b.BlockerAccountId)))
+                .ToListAsync(cancellationToken))
+            .Select(b => b.BlockerAccountId == callerId ? b.BlockedAccountId : b.BlockerAccountId)
+            .ToHashSet();
+
+        var relationships = await db.Friendships
+            .Where(f => (f.RequesterAccountId == callerId && matchIds.Contains(f.AddresseeAccountId)) ||
+                        (f.AddresseeAccountId == callerId && matchIds.Contains(f.RequesterAccountId)))
+            .ToListAsync(cancellationToken);
+        var relationByOtherId = relationships.ToDictionary(
+            f => f.RequesterAccountId == callerId ? f.AddresseeAccountId : f.RequesterAccountId,
+            f => f.Status == FriendshipStatus.Accepted ? FriendSearchRelation.Friends : FriendSearchRelation.Pending);
+
+        return matches
+            .Where(a => !blockedIds.Contains(a.Id) && !LalafellVisibility.IsHiddenFrom(caller, a, settings))
+            .Take(SearchResultLimit)
+            .Select(a => new FriendSearchResultDto(a.Id.ToString(), a.DisplayName, a.AvatarIcon, a.AvatarColorHex,
+                relationByOtherId.GetValueOrDefault(a.Id, FriendSearchRelation.None)))
+            .ToList();
+    }
+
+    public async Task<SendFriendRequestResult> SendRequestAsync(Guid requesterId, string recipientDisplayName, CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var recipient = await db.Accounts.FirstOrDefaultAsync(a => a.Handle == recipientHandle, cancellationToken);
+        var normalizedName = recipientDisplayName.Trim().ToLowerInvariant();
+        var recipient = await db.Accounts.FirstOrDefaultAsync(a => a.DisplayName.ToLower() == normalizedName, cancellationToken);
+        Console.Error.WriteLine($"[FriendDiag] requester={requesterId} rawName='{recipientDisplayName}' normalized='{normalizedName}' recipientFound={recipient is not null}");
+        return await SendRequestToAccountAsync(db, requesterId, recipient, cancellationToken);
+    }
+
+    // Right-click "Add Friend" in-game (see Plugin.cs's OnMenuOpened) - resolves by the target's
+    // real FFXIV character identity instead of needing anyone to know/type a chosen name at all.
+    // Only works if the target has ever linked that exact character to an AlphaChannel account
+    // (AccountCharacter's CharacterName+World, same lookup FindOrCreateAccountForCharacterAsync
+    // itself uses) - if they don't have AlphaChannel, this is indistinguishable from any other
+    // "not found" case, same anti-probing posture as the by-name lookup.
+    public async Task<SendFriendRequestResult> SendRequestByCharacterAsync(
+        Guid requesterId, string characterName, string world, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var character = await db.AccountCharacters
+            .FirstOrDefaultAsync(c => c.CharacterName == characterName && c.World == world, cancellationToken);
+        var recipient = character is null
+            ? null
+            : await db.Accounts.FirstOrDefaultAsync(a => a.Id == character.AccountId, cancellationToken);
+        return await SendRequestToAccountAsync(db, requesterId, recipient, cancellationToken);
+    }
+
+    private async Task<SendFriendRequestResult> SendRequestToAccountAsync(
+        AlphaChannelDbContext db, Guid requesterId, Account? recipient, CancellationToken cancellationToken)
+    {
         if (recipient is null || recipient.Id == requesterId)
         {
             return SendFriendRequestResult.NotFound;
@@ -188,6 +324,84 @@ internal sealed class FriendService(
         await db.SaveChangesAsync(cancellationToken);
         return true;
     }
+
+    // The "share out of band" path (Discord, party chat, voice) - skips the request/accept dance
+    // entirely and goes straight to Accepted, since redeeming a code someone privately shared with
+    // you is already a stronger mutual-consent signal than a searchable name ever was. Rotates the
+    // owner's code afterward so the one they shared can't be reused by anyone else who saw it - same
+    // "spent after use" intent Account.InviteCode was originally built with.
+    public async Task<RedeemInviteCodeResult> RedeemInviteCodeAsync(Guid callerId, string inviteCode, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var normalized = inviteCode.Trim().ToUpperInvariant();
+        var owner = await db.Accounts.FirstOrDefaultAsync(a => a.InviteCode == normalized, cancellationToken);
+        if (owner is null)
+        {
+            return RedeemInviteCodeResult.NotFound;
+        }
+
+        if (owner.Id == callerId)
+        {
+            return RedeemInviteCodeResult.Self;
+        }
+
+        if (await IsBlockedEitherWayAsync(db, callerId, owner.Id, cancellationToken))
+        {
+            return RedeemInviteCodeResult.NotFound;
+        }
+
+        var existing = await db.Friendships.FirstOrDefaultAsync(f =>
+            (f.RequesterAccountId == callerId && f.AddresseeAccountId == owner.Id) ||
+            (f.RequesterAccountId == owner.Id && f.AddresseeAccountId == callerId), cancellationToken);
+
+        if (existing is { Status: FriendshipStatus.Accepted })
+        {
+            return RedeemInviteCodeResult.AlreadyFriends;
+        }
+
+        if (existing is not null)
+        {
+            existing.Status = FriendshipStatus.Accepted;
+            existing.RespondedAtUtc = DateTime.UtcNow;
+        }
+        else
+        {
+            db.Friendships.Add(new Friendship
+            {
+                Id = Guid.NewGuid(),
+                RequesterAccountId = callerId,
+                AddresseeAccountId = owner.Id,
+                Status = FriendshipStatus.Accepted,
+                CreatedAtUtc = DateTime.UtcNow,
+                RespondedAtUtc = DateTime.UtcNow,
+            });
+        }
+
+        string newCode;
+        do
+        {
+            newCode = GenerateInviteCode();
+        }
+        while (await db.Accounts.AnyAsync(a => a.InviteCode == newCode, cancellationToken));
+
+        owner.InviteCode = newCode;
+        await db.SaveChangesAsync(cancellationToken);
+
+        var caller = await db.Accounts.FirstAsync(a => a.Id == callerId, cancellationToken);
+        await PushAsync(owner.Id, new SocialControl
+        {
+            Type = SocialSignalType.FriendAccepted,
+            AccountId = callerId.ToString(),
+            DisplayName = caller.DisplayName,
+        }, cancellationToken);
+
+        await activity.RecordAsync(callerId, ActivityEventType.FriendAccepted, null, cancellationToken);
+        await activity.RecordAsync(owner.Id, ActivityEventType.FriendAccepted, null, cancellationToken);
+
+        return RedeemInviteCodeResult.Friended;
+    }
+
+    private static string GenerateInviteCode() => RandomNumberGenerator.GetString("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 8);
 
     public async Task RemoveFriendAsync(Guid callerId, Guid otherId, CancellationToken cancellationToken)
     {

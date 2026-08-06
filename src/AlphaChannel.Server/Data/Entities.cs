@@ -7,11 +7,15 @@ internal sealed class Account
 {
     public Guid Id { get; set; }
 
-    // Chosen at signup, exact-match lookup only (no browse/search/autocomplete anywhere) - this is
-    // the one thing other players are allowed to find you by. Never derived from the real character
-    // name, so knowing someone's FFXIV character doesn't hand you their AlphaChannel identity.
+    // Random, immutable, internal-only id (never derived from the real character name). No longer
+    // used for lookup - see DisplayName below - kept as a stable identifier that survives a
+    // DisplayName change/collision-retry, and shown in Settings mostly for support/debugging.
     public required string Handle { get; set; }
 
+    // Chosen "gamer tag" - what's shown everywhere (Friends/Alpha Chat/Activity/Tweeter) and the
+    // one thing other players search/add-a-friend by (exact match, case-insensitive, unique - see
+    // AccountService.UpdateProfileAsync and FriendService.FindAccountByDisplayNameAsync). Defaults
+    // to Handle at account creation, but onboarding requires picking a real one before it finishes.
     public required string DisplayName { get; set; }
 
     // A second, regenerable way to be added as a friend that doesn't require picking a public
@@ -19,6 +23,17 @@ internal sealed class Account
     public required string InviteCode { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }
+
+    // Profile - all client-editable via PATCH /me. AvatarIcon is a key into a curated icon set the
+    // client presents (a FontAwesomeIcon name), not free text/an uploaded image - keeps this out of
+    // the file-hosting/content-moderation business entirely while still giving some personalization.
+    // Bio/StatusMessage are visible content like DisplayName, so they're reportable the same way
+    // (see Report.ReportedAccountId - an account-level report already covers profile content, no
+    // new report type needed).
+    public string? AvatarIcon { get; set; }
+    public string AvatarColorHex { get; set; } = "#9966FA";
+    public string? Bio { get; set; }
+    public string? StatusMessage { get; set; }
 
     public bool IsBanned { get; set; }
     public string? BanReason { get; set; }
@@ -86,6 +101,21 @@ internal sealed class AccountCharacter
     public DateTime LinkedAtUtc { get; set; }
 }
 
+// One row per plugin the client's IDalamudPluginInterface.InstalledPlugins reported at last sync -
+// see PluginHubService.SyncAsync, which replaces an account's whole set wholesale rather than
+// diffing (installed-plugin lists change rarely and are small, so this is simpler than tracking
+// adds/removes). Friends-only visibility (PluginHubService.GetFriendPluginsAsync), same posture as
+// the rest of the social surface - this is still "what someone runs," not public information.
+internal sealed class InstalledPlugin
+{
+    public Guid Id { get; set; }
+    public Guid AccountId { get; set; }
+    public required string InternalName { get; set; }
+    public required string Name { get; set; }
+    public required string Version { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
+}
+
 // Bearer tokens are never stored raw - only a SHA-256 hash, so a database dump doesn't hand out
 // live credentials. /rt and every authenticated endpoint hash the incoming token and look it up here.
 internal sealed class AuthToken
@@ -124,38 +154,60 @@ internal sealed class Block
     public DateTime CreatedAtUtc { get; set; }
 }
 
-// One row per pair of accounts. AccountAId/AccountBId are stored in a canonical (lower Guid first)
-// order so there's exactly one conversation per pair regardless of who messaged first.
-internal sealed class DmConversation
+// A 1:1 DM or a group chat - IsGroup distinguishes them, Name is a group's chosen title (null for
+// 1:1, where the client just shows the other member's DisplayName). Membership lives in
+// ConversationMember rather than a fixed AccountAId/AccountBId pair, so this scales to N members
+// without a separate parallel "group conversation" model.
+internal sealed class Conversation
 {
     public Guid Id { get; set; }
-    public Guid AccountAId { get; set; }
-    public Guid AccountBId { get; set; }
+    public bool IsGroup { get; set; }
+    public string? Name { get; set; }
     public DateTime CreatedAtUtc { get; set; }
 }
 
-// Ciphertext + nonce + AES-GCM tag only - the server never sees plaintext or the encryption key.
-// Static-static ECDH between the two participants' long-term Account.DmPublicKey values derives
-// the same AES-256-GCM key on both ends with nothing further to store/wrap server-side - see
-// AlphaChannel.Plugin/Crypto's DmCipher for the client-side half of this.
+// LastReadAtUtc is a per-member read cursor ("everything up to this instant is read"), same idiom
+// as ActivityReadMarker - replaces the old per-message DmMessage.ReadAtUtc, which only ever made
+// sense when a conversation had exactly one other party to read anything.
+internal sealed class ConversationMember
+{
+    public Guid Id { get; set; }
+    public Guid ConversationId { get; set; }
+    public Guid AccountId { get; set; }
+    public DateTime JoinedAtUtc { get; set; }
+    public DateTime? LastReadAtUtc { get; set; }
+}
+
+// Ciphertext + nonce + AES-GCM tag only - the server never sees plaintext or any encryption key.
+// Static-static ECDH between two accounts' long-term Account.DmPublicKey values derives the same
+// AES-256-GCM key on both ends, and that derivation is symmetric per pair regardless of who's
+// "sender" - see AlphaChannel.Plugin/Crypto's DmCipher for the client-side half.
 //
-// CommitmentTag is HMAC-SHA256(frankingKey, plaintext), computed and sent by the sender alongside
-// the ciphertext at send time. The frankingKey itself is embedded in the encrypted payload and
-// never touches the server - but if the recipient (or sender) later reports this message, their
+// Group E2E is sender-side fan-out, not new crypto: sending a message to a conversation with N
+// other members produces N rows, each independently encrypted with the pairwise key for that one
+// RecipientAccountId. GroupId ties those N rows together as "one logical message" - the sender can
+// decrypt ANY one of them (their own pairwise key with that specific recipient reproduces the same
+// shared secret), which is what lets them re-read their own sent history without a separate
+// "to self" copy. For a 1:1 conversation this collapses to exactly one row, identical to before.
+//
+// CommitmentTag is HMAC-SHA512(frankingKey, plaintext), computed and sent by the sender alongside
+// each ciphertext at send time. The frankingKey itself is embedded in the encrypted payload and
+// never touches the server - but if a recipient (or the sender) later reports this message, their
 // client can voluntarily reveal the plaintext + frankingKey, and the server can recompute the HMAC
 // and compare it to this stored tag to confirm the reveal is genuine, without ever having been
 // able to decrypt the message on its own. See Report.FrankingVerified.
 internal sealed class DmMessage
 {
     public Guid Id { get; set; }
+    public Guid GroupId { get; set; }
     public Guid ConversationId { get; set; }
     public Guid SenderAccountId { get; set; }
+    public Guid RecipientAccountId { get; set; }
     public required byte[] Ciphertext { get; set; }
     public required byte[] Nonce { get; set; }
     public required byte[] Tag { get; set; }
     public required byte[] CommitmentTag { get; set; }
     public DateTime SentAtUtc { get; set; }
-    public DateTime? ReadAtUtc { get; set; }
 }
 
 internal enum ActivityEventType
@@ -163,10 +215,18 @@ internal enum ActivityEventType
     StartedWatching,
     JoinedWatchAlong,
     FriendAccepted,
+    PostLiked,
+    PostReplied,
+    Mentioned,
+    VenueSaved,
+    WentLive,
 }
 
-// Friends-only by construction - the feed endpoint only ever queries events belonging to the
-// caller's accepted friends (plus their own), there is no public/global feed query anywhere.
+// Friends-only by construction for the "actor" side - the feed endpoint queries events belonging
+// to the caller's accepted friends (plus their own). TargetAccountId is the one exception: it
+// makes an event ALSO visible to one specific account regardless of friendship with the actor, for
+// "someone interacted with your stuff" cases (a like/reply/mention) where the actor is a Tweeter
+// follower rather than a friend - same one-directional-follow posture Task 11 already established.
 internal sealed class ActivityEvent
 {
     public Guid Id { get; set; }
@@ -174,6 +234,7 @@ internal sealed class ActivityEvent
     public ActivityEventType Type { get; set; }
     public string? Metadata { get; set; } // small JSON blob, e.g. { "title": "..." }
     public DateTime CreatedAtUtc { get; set; }
+    public Guid? TargetAccountId { get; set; }
 }
 
 internal enum ReportStatus
@@ -192,6 +253,20 @@ internal sealed class Post
     public Guid AuthorAccountId { get; set; }
     public required string Body { get; set; }
     public DateTime CreatedAtUtc { get; set; }
+
+    // Reply thread - flat, not nested (a reply's own replies just point back at it, but the client
+    // only ever renders one level at a time via GET /posts/{id}/replies). Null for a top-level post.
+    public Guid? ParentPostId { get; set; }
+
+    // A repost: Body is the optional quote-comment (empty string for a plain repost), the quoted
+    // content itself lives on the referenced Post and is resolved at hydration time (see
+    // TweeterService.HydrateAsync) rather than copied, so an edit/delete of the original is
+    // reflected (or, for delete, the repost just shows "original post deleted").
+    public Guid? RepostOfPostId { get; set; }
+
+    // A link, not an uploaded file - deliberately not in the file-hosting/content-moderation
+    // business, same reasoning as Account.AvatarIcon.
+    public string? ImageUrl { get; set; }
 }
 
 internal sealed class PostLike
@@ -241,4 +316,48 @@ internal sealed class Report
     public string? RevealedBody { get; set; }
     public string? FrankingKeyBase64 { get; set; }
     public bool? FrankingVerified { get; set; }
+}
+
+// A named, saved screen placement - client-side equivalent is Configuration.ScreenPositionPreset,
+// but that's purely local. A Venue is the same idea made shareable: TerritoryTypeId anchors it to a
+// specific zone (world-space X/Y/Z is meaningless outside the zone it was recorded in), so a friend
+// visiting the same zone can load the exact same spot. Friends-only visibility (VenueService.
+// GetFriendVenuesAsync), same posture as the rest of the social surface.
+internal sealed class Venue
+{
+    public Guid Id { get; set; }
+    public Guid OwnerAccountId { get; set; }
+    public required string Name { get; set; }
+    public int TerritoryTypeId { get; set; }
+    public float ScreenX { get; set; }
+    public float ScreenY { get; set; }
+    public float ScreenZ { get; set; }
+    public float ScreenYaw { get; set; }
+    public float ScreenScale { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+}
+
+// One per account - hash-only storage, same reasoning as AuthToken (a database dump shouldn't hand
+// out live credentials). The raw key is only ever shown once, at (re)generation time, formatted as
+// "{accountId}.{secret}" so MediaMTX's publish-auth webhook (LiveEndpoints' media group) can parse
+// the account back out of the RTMP path without a lookup-by-secret scan.
+internal sealed class StreamKey
+{
+    public Guid Id { get; set; }
+    public Guid AccountId { get; set; }
+    public required string KeyHash { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime? RotatedAtUtc { get; set; }
+}
+
+// MediaMTX's own publisher state (via its runOnReady/runOnNotReady hooks calling back into
+// LiveEndpoints) is the source of truth for these rows, not a client-invoked start/stop - OBS can
+// crash or lose connection without the plugin ever hearing about it, so trusting a client-asserted
+// "I'm live" flag would drift from reality almost immediately. EndedAtUtc null means currently live.
+internal sealed class LiveSession
+{
+    public Guid Id { get; set; }
+    public Guid AccountId { get; set; }
+    public DateTime StartedAtUtc { get; set; }
+    public DateTime? EndedAtUtc { get; set; }
 }

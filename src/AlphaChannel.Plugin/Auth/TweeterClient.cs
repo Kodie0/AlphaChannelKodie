@@ -13,12 +13,12 @@ internal sealed class TweeterClient(Configuration configuration)
         return http;
     }
 
-    internal async Task<PostDto?> CreatePostAsync(string bearerToken, string body)
+    internal async Task<PostDto?> CreatePostAsync(string bearerToken, string body, string? parentPostId = null, string? imageUrl = null)
     {
         using var http = Http(bearerToken);
         try
         {
-            var response = await http.PostAsJsonAsync("/posts", new CreatePostRequest(body)).ConfigureAwait(false);
+            var response = await http.PostAsJsonAsync("/posts", new CreatePostRequest(body, parentPostId, imageUrl)).ConfigureAwait(false);
             return response.IsSuccessStatusCode ? await response.Content.ReadFromJsonAsync<PostDto>().ConfigureAwait(false) : null;
         }
         catch (Exception exception)
@@ -27,6 +27,27 @@ internal sealed class TweeterClient(Configuration configuration)
             return null;
         }
     }
+
+    internal async Task<PostDto?> RepostAsync(string bearerToken, string postId, string? quoteBody = null)
+    {
+        using var http = Http(bearerToken);
+        try
+        {
+            var response = await http.PostAsJsonAsync($"/posts/{postId}/repost", new RepostRequest(quoteBody)).ConfigureAwait(false);
+            return response.IsSuccessStatusCode ? await response.Content.ReadFromJsonAsync<PostDto>().ConfigureAwait(false) : null;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning($"[Tweeter] repost failed: {exception.Message}");
+            return null;
+        }
+    }
+
+    internal Task<TimelinePage?> GetRepliesAsync(string bearerToken, string postId) =>
+        GetAsync<TimelinePage>(bearerToken, $"/posts/{postId}/replies");
+
+    internal Task<TimelinePage?> SearchByHashtagAsync(string bearerToken, string hashtag) =>
+        GetAsync<TimelinePage>(bearerToken, $"/posts/search?hashtag={Uri.EscapeDataString(hashtag)}");
 
     internal Task<bool> DeletePostAsync(string bearerToken, string postId) => DeleteAsync(bearerToken, $"/posts/{postId}");
 

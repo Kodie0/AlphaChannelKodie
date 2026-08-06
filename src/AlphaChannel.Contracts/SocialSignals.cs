@@ -13,6 +13,8 @@ public static class SocialSignalType
     public const string FriendAccepted = "friend.accepted";
     public const string FriendRemoved = "friend.removed";
     public const string PresenceUpdate = "presence.update";
+    // Global connected-client count (UserDirectory sockets) — pushed to everyone on connect/disconnect.
+    public const string OnlineCount = "presence.onlineCount";
     public const string DmMessage = "dm.message";
     public const string ActivityNew = "activity.new";
 }
@@ -38,6 +40,9 @@ public sealed record SocialControl
     public long? TimestampUnix { get; init; }
 
     public bool? Online { get; init; }
+
+    // Global connected AlphaChannel clients — set on presence.onlineCount pushes only.
+    public int? OnlineCount { get; init; }
 
     // Already-resolved display text (e.g. "watching Alice's stream") - no client-side lookup needed.
     public string? WatchingLabel { get; init; }

@@ -20,15 +20,24 @@ internal sealed partial class MainWindow
 
     private void DrawReactions()
     {
-        SectionHeader("Reactions");
+        ImGui.TextUnformatted("Reactions");
+        ImGui.TextColored(MutedText, "They land on the in-world screen, not in this window.");
+        ImGui.Spacing();
+
+        if (stream.Mode == StreamMode.None)
+        {
+            ImGui.TextColored(MutedText, "Join or host a room first.");
+            return;
+        }
+
         for (var index = 0; index < ReactionIcons.Length; index++)
         {
             if (index > 0)
             {
-                ImGui.SameLine();
+                ImGui.SameLine(0, 10);
             }
 
-            if (IconButton(ReactionIcons[index]) && stream.Mode != StreamMode.None)
+            if (IconButton(ReactionIcons[index]))
             {
                 _ = stream.SendReactionAsync(ReactionIcons[index].ToIconString());
             }

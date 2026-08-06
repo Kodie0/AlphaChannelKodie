@@ -1,0 +1,23 @@
+# RTMP ingest (OBS connects here via the "Go Live" page's Server/Stream Key) and HLS output (pulled
+# by a CDN pull zone, not exposed directly to viewers - see docker-compose.yml's mediamtx service
+# comment for the full picture, and Server/Live/LiveService.cs for the path/query split that keeps a
+# streamer's own secret out of the public HLS URL).
+rtmp: yes
+rtmpAddress: :1935
+
+hls: yes
+hlsAddress: :8888
+
+# Every publish attempt is checked against our server's stream-key table; reads/playback are
+# deliberately left unauthenticated (LiveEndpoints' /live/media/auth only ever gates the "publish"
+# action - see its own comment) - same trust model as every other shareable video URL in this app.
+# "alphachannel-server" resolves via the shared docker-compose network, same as Caddy's reverse_proxy target.
+authHTTPAddress: http://alphachannel-server:5000/live/media/auth
+
+paths:
+  all_others:
+    # Fires once MediaMTX has an actively-connected publisher (OBS started streaming) and again
+    # once it doesn't (OBS stopped or crashed) - this, not a client-invoked button, is the source
+    # of truth for "is this account live" (see LiveSession's doc comment in Data/Entities.cs).
+    runOnOnline: 'curl -s -X POST -H "X-Media-Secret: $MEDIAMTX_WEBHOOK_SECRET" "http://alphachannel-server:5000/live/media/ready?path=$MTX_PATH"'
+    runOnOffline: 'curl -s -X POST -H "X-Media-Secret: $MEDIAMTX_WEBHOOK_SECRET" "http://alphachannel-server:5000/live/media/notready?path=$MTX_PATH"'

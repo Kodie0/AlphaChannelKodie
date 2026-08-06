@@ -86,6 +86,11 @@ internal sealed class SignInFlow(AuthClient authClient)
                         Token = poll.Token,
                         Handle = poll.Account.Handle,
                         DisplayName = poll.Account.DisplayName,
+                        AvatarIcon = poll.Account.AvatarIcon,
+                        AvatarColorHex = poll.Account.AvatarColorHex,
+                        Bio = poll.Account.Bio,
+                        StatusMessage = poll.Account.StatusMessage,
+                        InviteCode = poll.Account.InviteCode,
                     }, null, poll.IsNewAccount);
 
                 case AuthPollStatus.Denied:

@@ -64,6 +64,7 @@ internal sealed class StreamClient : IDisposable
     internal event Action<SocialControl>? OnFriendAccepted;
     internal event Action<SocialControl>? OnFriendRemoved;
     internal event Action<SocialControl>? OnPresenceUpdate;
+    internal event Action<int>? OnOnlineCount;
     internal event Action<SocialControl>? OnDmMessage;
     internal event Action<SocialControl>? OnActivityNew;
 
@@ -258,6 +259,9 @@ internal sealed class StreamClient : IDisposable
                 break;
             case SocialSignalType.PresenceUpdate:
                 OnPresenceUpdate?.Invoke(message);
+                break;
+            case SocialSignalType.OnlineCount when message.OnlineCount is { } count:
+                OnOnlineCount?.Invoke(count);
                 break;
             case SocialSignalType.DmMessage:
                 OnDmMessage?.Invoke(message);

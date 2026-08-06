@@ -9,14 +9,15 @@ internal static class DmEndpoints
     {
         var group = app.MapGroup("/dm").AddEndpointFilter<AccountAuthFilter>().AddEndpointFilter<LalafellGateFilter>();
 
-        group.MapPost("/conversations/{accountId:guid}", async (Guid accountId, HttpContext context, DmService dm, CancellationToken ct) =>
+        group.MapPost("/conversations", async (CreateConversationRequest request, HttpContext context, DmService dm, CancellationToken ct) =>
         {
-            var (result, conversationId) = await dm.StartConversationAsync(context.GetAccount().Id, accountId, ct);
+            var (result, conversationId) = await dm.CreateConversationAsync(context.GetAccount().Id, request.MemberAccountIds, request.Name, ct);
             return result switch
             {
-                StartConversationResult.Ok => Results.Ok(new { conversationId = conversationId!.Value.ToString() }),
-                StartConversationResult.NotFriends => Results.Json(new { reason = "not_friends" }, statusCode: StatusCodes.Status403Forbidden),
-                _ => Results.NotFound(),
+                CreateConversationResult.Ok => Results.Ok(new { conversationId = conversationId!.Value.ToString() }),
+                CreateConversationResult.NotFriends => Results.Json(new { reason = "not_friends" }, statusCode: StatusCodes.Status403Forbidden),
+                CreateConversationResult.Blocked => Results.Json(new { reason = "blocked" }, statusCode: StatusCodes.Status403Forbidden),
+                _ => Results.BadRequest(),
             };
         });
 

@@ -11,18 +11,30 @@ internal static class TweeterEndpoints
 
         group.MapPost("/posts", async (CreatePostRequest request, HttpContext context, TweeterService tweeter, CancellationToken ct) =>
         {
-            var post = await tweeter.CreatePostAsync(context.GetAccount().Id, request.Body, ct);
+            var post = await tweeter.CreatePostAsync(context.GetAccount().Id, request.Body, request.ParentPostId, request.ImageUrl, ct);
             return post is null ? Results.BadRequest() : Results.Created($"/posts/{post.Id}", post);
         });
 
         group.MapDelete("/posts/{id:guid}", async (Guid id, HttpContext context, TweeterService tweeter, CancellationToken ct) =>
             await tweeter.DeletePostAsync(id, context.GetAccount().Id, ct) ? Results.NoContent() : Results.NotFound());
 
+        group.MapPost("/posts/{id:guid}/repost", async (Guid id, RepostRequest request, HttpContext context, TweeterService tweeter, CancellationToken ct) =>
+        {
+            var post = await tweeter.RepostAsync(context.GetAccount().Id, id, request.Body, ct);
+            return post is null ? Results.BadRequest() : Results.Created($"/posts/{post.Id}", post);
+        });
+
+        group.MapGet("/posts/{id:guid}/replies", async (Guid id, HttpContext context, TweeterService tweeter, CancellationToken ct) =>
+            Results.Ok(await tweeter.GetRepliesAsync(id, context.GetAccount().Id, ct)));
+
         group.MapGet("/timeline", async (long? before, HttpContext context, TweeterService tweeter, CancellationToken ct) =>
             Results.Ok(await tweeter.GetTimelineAsync(context.GetAccount().Id, before, ct)));
 
         group.MapGet("/accounts/{accountId:guid}/posts", async (Guid accountId, long? before, HttpContext context, TweeterService tweeter, CancellationToken ct) =>
             Results.Ok(await tweeter.GetAccountPostsAsync(accountId, context.GetAccount().Id, before, ct)));
+
+        group.MapGet("/posts/search", async (string hashtag, HttpContext context, TweeterService tweeter, CancellationToken ct) =>
+            Results.Ok(await tweeter.SearchByHashtagAsync(context.GetAccount().Id, hashtag, ct)));
 
         group.MapPost("/posts/{id:guid}/like", async (Guid id, HttpContext context, TweeterService tweeter, CancellationToken ct) =>
         {

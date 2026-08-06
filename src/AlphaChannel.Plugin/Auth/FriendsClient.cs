@@ -32,20 +32,58 @@ internal sealed class FriendsClient(Configuration configuration)
     internal Task<FriendRequestsPage?> GetRequestsAsync(string bearerToken) =>
         GetAsync<FriendRequestsPage>(bearerToken, "/friends/requests");
 
-    internal Task<AccountSummaryDto?> FindByHandleAsync(string bearerToken, string handle) =>
-        GetAsync<AccountSummaryDto>(bearerToken, $"/accounts/by-handle/{Uri.EscapeDataString(handle)}");
+    internal Task<AccountSummaryDto?> FindByDisplayNameAsync(string bearerToken, string displayName) =>
+        GetAsync<AccountSummaryDto>(bearerToken, $"/accounts/by-handle/{Uri.EscapeDataString(displayName)}");
 
-    internal async Task<bool> SendRequestAsync(string bearerToken, string handle)
+    // Fires on every keystroke from the Friends page's live search box - see FriendService.
+    // SearchByDisplayNamePrefixAsync for the server-side matching/filtering.
+    internal Task<FriendSearchResultDto[]?> SearchAsync(string bearerToken, string query) =>
+        GetAsync<FriendSearchResultDto[]>(bearerToken, $"/friends/search?q={Uri.EscapeDataString(query)}");
+
+    internal async Task<bool> SendRequestAsync(string bearerToken, string displayName)
     {
         using var http = Http(bearerToken);
         try
         {
-            var response = await http.PostAsJsonAsync("/friends/requests", new SendFriendRequestRequest(handle)).ConfigureAwait(false);
+            var response = await http.PostAsJsonAsync("/friends/requests", new SendFriendRequestRequest(displayName)).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
         catch (Exception exception)
         {
             AepLog.Warning($"[Friends] send request failed: {exception.Message}");
+            return false;
+        }
+    }
+
+    // Right-click "Add Friend" in-game (Plugin.cs's OnMenuOpened) - looks up by real character
+    // identity instead of a chosen name, see FriendService.SendRequestByCharacterAsync.
+    internal async Task<bool> SendRequestByCharacterAsync(string bearerToken, string characterName, string world)
+    {
+        using var http = Http(bearerToken);
+        try
+        {
+            var response = await http.PostAsJsonAsync("/friends/requests/by-character",
+                new SendFriendRequestByCharacterRequest(characterName, world)).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning($"[Friends] send request by character failed: {exception.Message}");
+            return false;
+        }
+    }
+
+    internal async Task<bool> RedeemInviteCodeAsync(string bearerToken, string inviteCode)
+    {
+        using var http = Http(bearerToken);
+        try
+        {
+            var response = await http.PostAsJsonAsync("/friends/invite/redeem", new RedeemInviteCodeRequest(inviteCode)).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning($"[Friends] redeem invite code failed: {exception.Message}");
             return false;
         }
     }

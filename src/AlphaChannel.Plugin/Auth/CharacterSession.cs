@@ -11,4 +11,14 @@ internal sealed class CharacterSession
     public string Token { get; set; } = "";
     public string Handle { get; set; } = "";
     public string DisplayName { get; set; } = "";
+    public string? AvatarIcon { get; set; }
+    public string AvatarColorHex { get; set; } = "#9966FA";
+    public string? Bio { get; set; }
+    public string? StatusMessage { get; set; }
+
+    // Redeemable by anyone you share it with out of band (Discord, voice) to instantly become
+    // friends, no name search needed - see FriendService.RedeemInviteCodeAsync. Rotates whenever
+    // someone actually redeems it (so a shared code can't be reused by someone else who saw it),
+    // which is why this is refreshed from the server rather than treated as a fixed value.
+    public string InviteCode { get; set; } = "";
 }

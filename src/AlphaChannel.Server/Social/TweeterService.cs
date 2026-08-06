@@ -9,11 +9,11 @@ namespace AlphaChannel.Server.Social;
 // everything else social. No replies or media in v1 - kept to the smallest thing that's
 // recognizably "Tweeter" (post, like, follow, timeline), same "as simple as correctly does the
 // job" posture as the rest of this backend.
-internal sealed class TweeterService(IDbContextFactory<AlphaChannelDbContext> dbFactory)
+internal sealed class TweeterService(IDbContextFactory<AlphaChannelDbContext> dbFactory, ActivityService activity)
 {
     private const int TimelineLimit = 30;
 
-    public async Task<PostDto?> CreatePostAsync(Guid authorId, string body, CancellationToken cancellationToken)
+    public async Task<PostDto?> CreatePostAsync(Guid authorId, string body, string? parentPostId, string? imageUrl, CancellationToken cancellationToken)
     {
         var trimmed = body.Trim();
         if (trimmed.Length == 0 || trimmed.Length > TweeterLimits.MaxPostLength)
@@ -22,13 +22,109 @@ internal sealed class TweeterService(IDbContextFactory<AlphaChannelDbContext> db
         }
 
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var author = await db.Accounts.FirstAsync(a => a.Id == authorId, cancellationToken);
 
-        var post = new Post { Id = Guid.NewGuid(), AuthorAccountId = authorId, Body = trimmed, CreatedAtUtc = DateTime.UtcNow };
+        Post? parent = null;
+        if (parentPostId is { Length: > 0 } && Guid.TryParse(parentPostId, out var parentGuid))
+        {
+            parent = await db.Posts.FirstOrDefaultAsync(p => p.Id == parentGuid, cancellationToken);
+        }
+
+        var post = new Post
+        {
+            Id = Guid.NewGuid(),
+            AuthorAccountId = authorId,
+            Body = trimmed,
+            CreatedAtUtc = DateTime.UtcNow,
+            ParentPostId = parent?.Id,
+            ImageUrl = NormalizeImageUrl(imageUrl),
+        };
         db.Posts.Add(post);
         await db.SaveChangesAsync(cancellationToken);
 
-        return ToDto(post, author, likeCount: 0, likedByMe: false);
+        // Notify whoever's being replied to, same "target regardless of friendship" reasoning as
+        // PostLiked in LikeAsync - a reply can come from any follower, not just a friend.
+        if (parent is not null && parent.AuthorAccountId != authorId)
+        {
+            await activity.RecordAsync(authorId, ActivityEventType.PostReplied, post.Id.ToString(), cancellationToken, parent.AuthorAccountId);
+        }
+
+        return (await HydrateAsync(db, [post], authorId, cancellationToken)).FirstOrDefault();
+    }
+
+    public async Task<PostDto?> RepostAsync(Guid callerId, Guid postId, string? quoteBody, CancellationToken cancellationToken)
+    {
+        var trimmedQuote = (quoteBody ?? string.Empty).Trim();
+        if (trimmedQuote.Length > TweeterLimits.MaxPostLength)
+        {
+            return null;
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var original = await db.Posts.FirstOrDefaultAsync(p => p.Id == postId, cancellationToken);
+        if (original is null)
+        {
+            return null;
+        }
+
+        var post = new Post
+        {
+            Id = Guid.NewGuid(),
+            AuthorAccountId = callerId,
+            Body = trimmedQuote,
+            CreatedAtUtc = DateTime.UtcNow,
+            RepostOfPostId = original.Id,
+        };
+        db.Posts.Add(post);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return (await HydrateAsync(db, [post], callerId, cancellationToken)).FirstOrDefault();
+    }
+
+    public async Task<TimelinePage> GetRepliesAsync(Guid postId, Guid viewerId, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var posts = await db.Posts.Where(p => p.ParentPostId == postId).OrderBy(p => p.CreatedAtUtc).ToListAsync(cancellationToken);
+        var items = await HydrateAsync(db, posts, viewerId, cancellationToken);
+        return new TimelinePage(items, null);
+    }
+
+    // Scoped to the same "self + who I follow" set as GetTimelineAsync - deliberately not a global
+    // search, consistent with there being no public/browse surface anywhere else in this backend
+    // (see FriendService.FindAccountByDisplayNameAsync's own doc comment on that posture).
+    public async Task<TimelinePage> SearchByHashtagAsync(Guid viewerId, string hashtag, CancellationToken cancellationToken)
+    {
+        var normalized = "#" + hashtag.TrimStart('#').Trim().ToLowerInvariant();
+        if (normalized.Length <= 1)
+        {
+            return new TimelinePage([], null);
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var followingIds = await db.Follows.Where(f => f.FollowerAccountId == viewerId)
+            .Select(f => f.FolloweeAccountId).ToListAsync(cancellationToken);
+        followingIds.Add(viewerId);
+
+        var posts = await db.Posts
+            .Where(p => followingIds.Contains(p.AuthorAccountId) && p.Body.ToLower().Contains(normalized))
+            .OrderByDescending(p => p.CreatedAtUtc)
+            .Take(TimelineLimit)
+            .ToListAsync(cancellationToken);
+
+        var items = await HydrateAsync(db, posts, viewerId, cancellationToken);
+        return new TimelinePage(items, null);
+    }
+
+    private static string? NormalizeImageUrl(string? imageUrl)
+    {
+        var trimmed = imageUrl?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            return null;
+        }
+
+        return Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+            ? trimmed[..Math.Min(trimmed.Length, 500)]
+            : null;
     }
 
     public async Task<bool> DeletePostAsync(Guid postId, Guid callerId, CancellationToken cancellationToken)
@@ -104,10 +200,22 @@ internal sealed class TweeterService(IDbContextFactory<AlphaChannelDbContext> db
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var exists = await db.PostLikes.AnyAsync(l => l.PostId == postId && l.AccountId == callerId, cancellationToken);
-        if (!exists)
+        if (exists)
         {
-            db.PostLikes.Add(new PostLike { Id = Guid.NewGuid(), PostId = postId, AccountId = callerId, CreatedAtUtc = DateTime.UtcNow });
-            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        db.PostLikes.Add(new PostLike { Id = Guid.NewGuid(), PostId = postId, AccountId = callerId, CreatedAtUtc = DateTime.UtcNow });
+        await db.SaveChangesAsync(cancellationToken);
+
+        // Notify the author (if it's not their own post) regardless of whether they're actually
+        // friends with the liker - a like can come from anyone following them, and ActivityEvent.
+        // TargetAccountId is exactly the "notify this specific account either way" mechanism (see
+        // ActivityService's own doc comment on why).
+        var post = await db.Posts.FirstOrDefaultAsync(p => p.Id == postId, cancellationToken);
+        if (post is not null && post.AuthorAccountId != callerId)
+        {
+            await activity.RecordAsync(callerId, ActivityEventType.PostLiked, postId.ToString(), cancellationToken, post.AuthorAccountId);
         }
     }
 
@@ -197,15 +305,40 @@ internal sealed class TweeterService(IDbContextFactory<AlphaChannelDbContext> db
         var myLikes = (await db.PostLikes.Where(l => postIds.Contains(l.PostId) && l.AccountId == viewerId)
             .Select(l => l.PostId).ToListAsync(cancellationToken)).ToHashSet();
 
+        var replyCounts = (await db.Posts.Where(p => p.ParentPostId != null && postIds.Contains(p.ParentPostId!.Value))
+            .GroupBy(p => p.ParentPostId!.Value).Select(g => new { g.Key, Count = g.Count() }).ToListAsync(cancellationToken))
+            .ToDictionary(x => x.Key, x => x.Count);
+
+        // One extra round trip to resolve what's being reposted (post + its author), rather than
+        // denormalizing the quoted content onto the repost row - see Post.RepostOfPostId's doc
+        // comment on why that's the deliberate tradeoff (a deleted original just shows as such).
+        var repostOfIds = posts.Where(p => p.RepostOfPostId is not null).Select(p => p.RepostOfPostId!.Value).Distinct().ToList();
+        var repostOfPosts = repostOfIds.Count == 0
+            ? []
+            : await db.Posts.Where(p => repostOfIds.Contains(p.Id)).ToListAsync(cancellationToken);
+        var repostOfAuthorIds = repostOfPosts.Select(p => p.AuthorAccountId).Distinct().ToList();
+        var repostOfAuthors = repostOfAuthorIds.Count == 0
+            ? new Dictionary<Guid, Account>()
+            : (await db.Accounts.Where(a => repostOfAuthorIds.Contains(a.Id)).ToListAsync(cancellationToken)).ToDictionary(a => a.Id);
+        var repostOfById = repostOfPosts.ToDictionary(p => p.Id);
+
         return posts
             .Where(p => authors.ContainsKey(p.AuthorAccountId))
-            .Select(p => ToDto(p, authors[p.AuthorAccountId], likeCounts.GetValueOrDefault(p.Id), myLikes.Contains(p.Id)))
+            .Select(p =>
+            {
+                Post? repostOf = p.RepostOfPostId is { } repostId ? repostOfById.GetValueOrDefault(repostId) : null;
+                Account? repostOfAuthor = repostOf is not null ? repostOfAuthors.GetValueOrDefault(repostOf.AuthorAccountId) : null;
+                return ToDto(p, authors[p.AuthorAccountId], likeCounts.GetValueOrDefault(p.Id), myLikes.Contains(p.Id),
+                    replyCounts.GetValueOrDefault(p.Id), repostOf, repostOfAuthor);
+            })
             .ToArray();
     }
 
-    private static PostDto ToDto(Post post, Account author, int likeCount, bool likedByMe) => new(
+    private static PostDto ToDto(Post post, Account author, int likeCount, bool likedByMe, int replyCount, Post? repostOf, Account? repostOfAuthor) => new(
         post.Id.ToString(), author.Id.ToString(), author.Handle, author.DisplayName,
-        post.Body, ToUnixSeconds(post.CreatedAtUtc), likeCount, likedByMe);
+        post.Body, ToUnixSeconds(post.CreatedAtUtc), likeCount, likedByMe,
+        post.ParentPostId?.ToString(), replyCount, post.ImageUrl,
+        post.RepostOfPostId?.ToString(), repostOfAuthor?.DisplayName, repostOf?.Body, repostOf?.ImageUrl);
 
     private static Task<bool> IsBlockedEitherWayAsync(AlphaChannelDbContext db, Guid a, Guid b, CancellationToken cancellationToken) =>
         db.Blocks.AnyAsync(x => (x.BlockerAccountId == a && x.BlockedAccountId == b) || (x.BlockerAccountId == b && x.BlockedAccountId == a), cancellationToken);

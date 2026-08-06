@@ -26,6 +26,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+    [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
 
     internal static Configuration Cfg { get; private set; } = null!;
 
@@ -42,8 +43,14 @@ public sealed class Plugin : IDalamudPlugin
     private readonly DmClient dmClient;
     private readonly ReportClient reportClient;
     private readonly TweeterClient tweeterClient;
+    private readonly PluginHubClient pluginHubClient;
+    private readonly VenuesClient venuesClient;
+    private readonly LiveClient liveClient;
+    private readonly TwitchClient twitchClient;
     private readonly KeysClient keysClient;
     private readonly AlphaChannel.Plugin.Crypto.KeyVault keyVault;
+    private readonly Whispers.WhisperMirror whisperMirror;
+    private ulong lastWhisperContentId = ulong.MaxValue;
 
     // Written from the network thread (OnRemoteState), read/cleared on the main thread
     // (OnFrameworkUpdate) - a plain reference field is fine here, a single pointer swap is already
@@ -101,11 +108,17 @@ public sealed class Plugin : IDalamudPlugin
         dmClient = new DmClient(Cfg);
         reportClient = new ReportClient(Cfg);
         tweeterClient = new TweeterClient(Cfg);
+        pluginHubClient = new PluginHubClient(Cfg);
+        venuesClient = new VenuesClient(Cfg);
+        liveClient = new LiveClient(Cfg);
+        twitchClient = new TwitchClient(Cfg);
         keysClient = new KeysClient(Cfg);
         keyVault = new AlphaChannel.Plugin.Crypto.KeyVault(Cfg, keysClient);
+        whisperMirror = new Whispers.WhisperMirror(Cfg, PluginInterface.ConfigDirectory.FullName);
 
         mainWindow = new MainWindow(screenController, video, queue, stream, RequestRename, authClient, signInFlow,
-            friendsClient, activityClient, dmClient, reportClient, tweeterClient, keyVault, UpdateSessionForCurrentCharacter);
+            friendsClient, activityClient, dmClient, reportClient, tweeterClient, pluginHubClient, venuesClient, liveClient,
+            twitchClient, keyVault, whisperMirror, UpdateSessionForCurrentCharacter);
         windowSystem.AddWindow(mainWindow);
 
         Framework.Update += OnFrameworkUpdate;
@@ -143,17 +156,71 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.IsOpen = true;
             },
         });
+
+        // "Make it easier for people to find one another": resolves by the target's actual FFXIV
+        // character identity (name+world), not a chosen name anyone has to know/type - if you can
+        // see them, you can add them. Needs both a signed-in caller and a resolvable world (cross-
+        // world/instanced targets don't always carry one - see the try/catch below, same defensive
+        // pattern WhisperMirror.cs uses for the same RowRef<World> API).
+        if (mainWindow.CurrentSession is { } session)
+        {
+            var characterName = target.TargetName;
+            string? world = null;
+            try
+            {
+                world = target.TargetHomeWorld.IsValid ? target.TargetHomeWorld.Value.Name.ToString() : null;
+            }
+            catch (Exception exception)
+            {
+                AepLog.Warning($"[Friends] couldn't resolve target world: {exception.Message}");
+            }
+
+            if (world is { Length: > 0 })
+            {
+                args.AddMenuItem(new MenuItem
+                {
+                    Name = "Add AlphaChannel Friend",
+                    PrefixChar = 'A',
+                    PrefixColor = 588,
+                    OnClicked = clickedArgs =>
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            var ok = await friendsClient.SendRequestByCharacterAsync(session.Token, characterName, world);
+                            mainWindow.HandleAddFriendByCharacterResult(ok, characterName);
+                        });
+                    },
+                });
+            }
+        }
     }
 
-    private void ToggleMainWindow() => mainWindow.IsOpen = !mainWindow.IsOpen;
+    private void ToggleMainWindow()
+    {
+        if (mainWindow.IsOpen)
+        {
+            mainWindow.CloseUi();
+            return;
+        }
+
+        mainWindow.OpenUi();
+    }
 
     private void OnFrameworkUpdate(IFramework framework)
     {
         screenController.OnFrameworkUpdate();
         queue.OnFrameworkUpdate();
         EnsureCharacterHasName();
-        mainWindow.CurrentDisplayName = Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId());
-        mainWindow.CurrentSession = Cfg.CharacterSessions.GetValueOrDefault(ReadLocalContentId());
+        var contentId = ReadLocalContentId();
+        if (contentId != lastWhisperContentId)
+        {
+            lastWhisperContentId = contentId;
+            whisperMirror.SetCharacter(contentId);
+            mainWindow.ResetWhisperUi();
+        }
+
+        mainWindow.CurrentDisplayName = Cfg.CharacterDisplayNames.GetValueOrDefault(contentId);
+        mainWindow.CurrentSession = Cfg.CharacterSessions.GetValueOrDefault(contentId);
         mainWindow.CurrentCharacterName = ObjectTable.LocalPlayer?.Name.TextValue;
         mainWindow.CurrentWorldName = ReadLocalWorldName();
         mainWindow.CurrentIsLalafell = ReadIsLalafell();
@@ -404,6 +471,7 @@ public sealed class Plugin : IDalamudPlugin
         Framework.Update -= OnFrameworkUpdate;
 
         mainWindow.Dispose();
+        whisperMirror.Dispose();
         stream.Dispose();
         screenController.Dispose();
         DxHandler.Dispose();

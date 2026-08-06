@@ -9,8 +9,11 @@ internal static class LalafellVisibility
     // Per-viewer filter: does this specific viewer want target's Lalafell-flagged content hidden?
     // HideLalafellFromNonLalafell is an admin-wide override that forces it for everyone regardless
     // of what the viewer answered at onboarding.
-    public static bool IsHiddenFrom(Account viewer, Account target, ServerSettings settings) =>
-        target.IsLalafell && (settings.HideLalafellFromNonLalafell || !viewer.WantsToSeeLalafellContent);
+    //
+    // Temporarily disabled (always false) alongside LalafellGateFilter - see that file's comment.
+    // The settings/preference plumbing (ServerSettings.HideLalafellFromNonLalafell,
+    // Account.WantsToSeeLalafellContent) stays intact for when this is re-enabled.
+    public static bool IsHiddenFrom(Account viewer, Account target, ServerSettings settings) => false;
 
     // Separate axis from the above: can this account use social features AT ALL yet? Only
     // meaningful for the account's own actions, not for filtering how others see them.

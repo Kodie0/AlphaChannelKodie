@@ -8,23 +8,23 @@ namespace AlphaChannel.Plugin;
 // accepted your friend request" - refreshed on open and again whenever StreamClient's
 // OnActivityNew ping fires (see AlphaChannel.Contracts.SocialSignalType, the feed itself is always
 // fetched via REST, the socket only ever says "something changed, refetch").
+//
+// Layout identity: vertical timeline rail — not card tiles.
 internal sealed partial class MainWindow
 {
     private bool activityDirty = true;
     private bool activityLoading;
     private ActivityEventDto[] activityItems = [];
     private string? activityNextCursor;
+    private bool activityUnreadDirty = true;
+    private int activityUnreadCount;
 
     private void DrawActivity()
     {
         if (CurrentSession is not { } session)
         {
-            ImGui.TextColored(MutedText, "Sign in to use Activity.");
-            if (ImGui.Button("Go to Settings"))
-            {
-                currentPage = HomePage.Settings;
-            }
-
+            DrawPlainEmpty("Activity needs a signed-in account.", "Open Settings",
+                () => currentPage = HomePage.Settings);
             return;
         }
 
@@ -35,22 +35,16 @@ internal sealed partial class MainWindow
 
         if (activityItems.Length == 0)
         {
-            ImGui.TextDisabled(activityLoading ? "Loading..." : "Nothing yet - friend activity shows up here.");
+            DrawPlainEmpty(
+                activityLoading ? "Loading…" : "Quiet for now. Friend watches and joins show up here.",
+                activityLoading ? null : "Find friends",
+                activityLoading ? null : () => currentPage = HomePage.Friends);
             return;
         }
 
         foreach (var item in activityItems)
         {
-            var label = item.Type switch
-            {
-                "StartedWatching" => $"@{item.ActorHandle} started watching",
-                "JoinedWatchAlong" => item.Metadata is { Length: > 0 }
-                    ? $"@{item.ActorHandle} joined {item.Metadata}'s watch-along"
-                    : $"@{item.ActorHandle} joined a watch-along",
-                "FriendAccepted" => $"@{item.ActorHandle} accepted a friend request",
-                _ => $"@{item.ActorHandle}: {item.Type}",
-            };
-            ImGui.BulletText(label);
+            DrawTimelineRow($"act{item.CreatedAtUnix}{item.ActorDisplayName}", ActivityLabel(item));
         }
 
         if (activityNextCursor is { Length: > 0 } cursor)
@@ -58,7 +52,7 @@ internal sealed partial class MainWindow
             ImGui.Spacing();
             using (ImRaii.Disabled(activityLoading))
             {
-                if (ImGui.Button("Load older"))
+                if (ImGui.Button("Load older", new Vector2(-1, 32)))
                 {
                     RefreshActivity(session.Token, reset: false, before: long.Parse(cursor));
                 }
@@ -83,9 +77,10 @@ internal sealed partial class MainWindow
                 activityItems = reset ? page.Items : [.. activityItems, .. page.Items];
                 activityNextCursor = page.NextCursor;
 
-                if (page.Items.Length > 0)
+                if (page.Items.Length > 0 && reset)
                 {
                     await activityClient.MarkReadAsync(bearerToken, page.Items[0].CreatedAtUnix);
+                    activityUnreadCount = 0;
                 }
             }
             finally

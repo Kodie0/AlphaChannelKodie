@@ -3,6 +3,7 @@ using Dalamud.Bindings.ImGui;
 
 namespace AlphaChannel.Plugin;
 
+// Screen is a calibration tool — dense sliders and a preset list, no media-stage chrome.
 internal sealed partial class MainWindow
 {
     private string presetNameInput = string.Empty;
@@ -10,6 +11,10 @@ internal sealed partial class MainWindow
     private void DrawScreenControls()
     {
         var engine = screenController.Engine;
+
+        ImGui.TextUnformatted("Transform");
+        ImGui.TextColored(MutedText, "Drag while looking at the in-world panel.");
+        ImGui.Spacing();
 
         var position = engine.ScreenPosition;
         var yaw = engine.ScreenYaw;
@@ -23,29 +28,37 @@ internal sealed partial class MainWindow
             engine.SetScreenTransform(position, yaw, scale);
         }
 
-        if (ImGui.Button("Recenter in front of me"))
+        if (ImGui.Button("Recenter in front of me", new Vector2(-1, 32)))
         {
             engine.RecenterScreen();
         }
 
         ImGui.Spacing();
-        ImGui.Separator();
+        ImGui.Dummy(new Vector2(0, 4));
+        var origin = ImGui.GetCursorScreenPos();
+        var width = ImGui.GetContentRegionAvail().X;
+        ImGui.GetWindowDrawList().AddRectFilled(origin, origin + new Vector2(width, 1f),
+            ImGui.GetColorU32(BorderSubtle));
+        ImGui.Dummy(new Vector2(width, 12f));
+
+        ImGui.TextUnformatted("Presets");
+        ImGui.TextColored(MutedText, "Named transforms for places you revisit.");
         ImGui.Spacing();
-        SectionHeader("Presets");
 
         ImGui.SetNextItemWidth(-70f);
         ImGui.InputTextWithHint("##presetName", "Preset name", ref presetNameInput, 32);
         ImGui.SameLine();
-        if (ImGui.Button("Save current") && presetNameInput.Length > 0)
+        if (ImGui.Button("Save") && presetNameInput.Length > 0)
         {
+            var savePos = engine.ScreenPosition;
             Plugin.Cfg.ScreenPresets.Add(new ScreenPositionPreset
             {
                 Name = presetNameInput.Trim(),
-                X = position.X,
-                Y = position.Y,
-                Z = position.Z,
-                Yaw = yaw,
-                Scale = scale,
+                X = savePos.X,
+                Y = savePos.Y,
+                Z = savePos.Z,
+                Yaw = engine.ScreenYaw,
+                Scale = engine.ScreenScale,
             });
             Plugin.Cfg.Save();
             presetNameInput = string.Empty;
@@ -53,15 +66,17 @@ internal sealed partial class MainWindow
 
         if (Plugin.Cfg.ScreenPresets.Count == 0)
         {
-            ImGui.TextDisabled("No presets saved yet.");
+            DrawPlainEmpty("No presets yet.");
             return;
         }
 
+        ImGui.Spacing();
         for (var index = 0; index < Plugin.Cfg.ScreenPresets.Count; index++)
         {
             var preset = Plugin.Cfg.ScreenPresets[index];
             ImGui.PushID(index);
-            ImGui.Text(preset.Name);
+            ImGui.AlignTextToFramePadding();
+            ImGui.BulletText(preset.Name);
             ImGui.SameLine();
             if (ImGui.SmallButton("Load"))
             {

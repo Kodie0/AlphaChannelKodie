@@ -11,7 +11,9 @@ internal sealed class ActivityService(IDbContextFactory<AlphaChannelDbContext> d
 {
     private const int DefaultLimit = 30;
 
-    public async Task RecordAsync(Guid actorAccountId, ActivityEventType type, string? metadata, CancellationToken cancellationToken)
+    public async Task RecordAsync(
+        Guid actorAccountId, ActivityEventType type, string? metadata, CancellationToken cancellationToken,
+        Guid? targetAccountId = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         db.ActivityEvents.Add(new ActivityEvent
@@ -21,13 +23,20 @@ internal sealed class ActivityService(IDbContextFactory<AlphaChannelDbContext> d
             Type = type,
             Metadata = metadata,
             CreatedAtUtc = DateTime.UtcNow,
+            TargetAccountId = targetAccountId,
         });
         await db.SaveChangesAsync(cancellationToken);
 
         var friendIds = await FriendIdsAsync(db, actorAccountId, cancellationToken);
-        foreach (var friendId in friendIds)
+        var pushTo = new HashSet<Guid>(friendIds);
+        if (targetAccountId is { } target)
         {
-            if (directory.TryGetSocket(friendId.ToString(), out var socket) && socket is not null)
+            pushTo.Add(target);
+        }
+
+        foreach (var recipientId in pushTo)
+        {
+            if (directory.TryGetSocket(recipientId.ToString(), out var socket) && socket is not null)
             {
                 await SocketSend.SendAsync(socket, new SocialControl
                 {
@@ -46,7 +55,7 @@ internal sealed class ActivityService(IDbContextFactory<AlphaChannelDbContext> d
         var visibleActorIds = await FriendIdsAsync(db, viewerAccountId, cancellationToken);
         visibleActorIds.Add(viewerAccountId);
 
-        var query = db.ActivityEvents.Where(e => visibleActorIds.Contains(e.AccountId));
+        var query = db.ActivityEvents.Where(e => visibleActorIds.Contains(e.AccountId) || e.TargetAccountId == viewerAccountId);
         if (beforeUnix is { } before)
         {
             var beforeDate = DateTimeOffset.FromUnixTimeSeconds(before).UtcDateTime;
@@ -75,6 +84,24 @@ internal sealed class ActivityService(IDbContextFactory<AlphaChannelDbContext> d
 
         var nextCursor = hasMore && events.Count > 0 ? ToUnixSeconds(events[^1].CreatedAtUtc).ToString() : null;
         return new ActivityPage(items, nextCursor);
+    }
+
+    // Powers the sidebar badge - a plain count rather than reusing GetFeedAsync's page, since the
+    // badge just needs a number and doesn't want the actor-lookup/Lalafell-visibility join overhead
+    // of building full ActivityEventDtos for events that'll never be displayed as such.
+    public async Task<int> GetUnreadCountAsync(Guid viewerAccountId, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+
+        var visibleActorIds = await FriendIdsAsync(db, viewerAccountId, cancellationToken);
+        visibleActorIds.Add(viewerAccountId);
+
+        var marker = await db.ActivityReadMarkers.FirstOrDefaultAsync(m => m.AccountId == viewerAccountId, cancellationToken);
+        var since = marker?.LastReadAtUtc ?? DateTime.MinValue;
+
+        return await db.ActivityEvents.CountAsync(e =>
+            (visibleActorIds.Contains(e.AccountId) || e.TargetAccountId == viewerAccountId) && e.CreatedAtUtc > since,
+            cancellationToken);
     }
 
     public async Task MarkReadAsync(Guid accountId, long upToUnix, CancellationToken cancellationToken)

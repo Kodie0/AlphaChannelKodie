@@ -6,6 +6,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlphaChannel.Server.Auth;
 
+internal enum UpdateProfileResult
+{
+    Updated,
+    NameTaken,
+    InvalidFormat,
+    NotFound,
+}
+
+internal sealed record UpdateProfileOutcome(UpdateProfileResult Result, AccountSummary? Account);
+
 // All account creation, character linking, and bearer-token issuance/validation lives here so
 // there is exactly one place that touches AccountCharacter (the real-identity table) and exactly
 // one place that ever compares a raw token against the hashed values in AuthTokens.
@@ -129,6 +139,70 @@ internal sealed class AccountService(
         account.WantsToSeeLalafellContent = wantsToSeeLalafellContent;
         await db.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task<UpdateProfileOutcome> UpdateProfileAsync(Guid accountId, UpdateProfileRequest request, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var account = await db.Accounts.FirstOrDefaultAsync(a => a.Id == accountId, cancellationToken);
+        if (account is null)
+        {
+            return new UpdateProfileOutcome(UpdateProfileResult.NotFound, null);
+        }
+
+        if (request.DisplayName is { Length: > 0 } displayName)
+        {
+            var trimmed = displayName.Trim();
+
+            // DisplayName is now the searchable/add-a-friend identifier (see FriendService), so its
+            // format has to stay narrow enough to be an unambiguous search key - see
+            // DisplayNameRules's own header comment for why.
+            if (!DisplayNameRules.IsValid(trimmed))
+            {
+                return new UpdateProfileOutcome(UpdateProfileResult.InvalidFormat, null);
+            }
+
+            // Unique, case-insensitive, since two players picking "Ysera"/"ysera" would otherwise be
+            // indistinguishable at lookup time.
+            var taken = await db.Accounts.AnyAsync(
+                a => a.Id != accountId && a.DisplayName.ToLower() == trimmed.ToLower(), cancellationToken);
+            if (taken)
+            {
+                return new UpdateProfileOutcome(UpdateProfileResult.NameTaken, null);
+            }
+
+            account.DisplayName = trimmed;
+        }
+
+        // AvatarIcon is a key into a client-curated icon list, not free text a user types - still
+        // length-capped defensively rather than validated against that list, since the server has
+        // no reason to know the client's icon set.
+        if (request.AvatarIcon is { Length: > 0 } avatarIcon)
+        {
+            account.AvatarIcon = avatarIcon.Trim()[..Math.Min(avatarIcon.Trim().Length, 32)];
+        }
+
+        if (request.AvatarColorHex is { Length: > 0 } avatarColor)
+        {
+            account.AvatarColorHex = avatarColor.Trim()[..Math.Min(avatarColor.Trim().Length, 16)];
+        }
+
+        if (request.Bio is { } bio)
+        {
+            account.Bio = bio.Trim() is { Length: > 0 } trimmedBio ? trimmedBio[..Math.Min(trimmedBio.Length, 160)] : null;
+        }
+
+        if (request.StatusMessage is { } status)
+        {
+            account.StatusMessage = status.Trim() is { Length: > 0 } trimmedStatus ? trimmedStatus[..Math.Min(trimmedStatus.Length, 64)] : null;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return new UpdateProfileOutcome(UpdateProfileResult.Updated, ToSummary(account));
+    }
+
+    internal static AccountSummary ToSummary(Account account) => new(
+        account.Id.ToString(), account.Handle, account.DisplayName, account.InviteCode,
+        account.AvatarIcon, account.AvatarColorHex, account.Bio, account.StatusMessage);
 
     private Task NotifyPendingReviewAsync(Account account, string characterName, string world) =>
         discord.NotifyAsync(

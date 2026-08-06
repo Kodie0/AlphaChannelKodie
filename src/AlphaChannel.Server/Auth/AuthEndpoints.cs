@@ -37,15 +37,24 @@ internal static class AuthEndpoints
         });
 
         app.MapGet("/me", (HttpContext context) =>
-        {
-            var account = context.GetAccount();
-            return Results.Ok(new AccountSummary(account.Id.ToString(), account.Handle, account.DisplayName, account.InviteCode));
-        }).AddEndpointFilter<AccountAuthFilter>();
+            Results.Ok(AccountService.ToSummary(context.GetAccount()))).AddEndpointFilter<AccountAuthFilter>();
 
         app.MapPost("/me/onboarding", async (OnboardingRequest request, HttpContext context, AccountService accounts, CancellationToken ct) =>
         {
             await accounts.UpdateOnboardingAsync(context.GetAccount().Id, request.Races, request.WantsToSeeLalafellContent, ct);
             return Results.NoContent();
+        }).AddEndpointFilter<AccountAuthFilter>();
+
+        app.MapPatch("/me", async (UpdateProfileRequest request, HttpContext context, AccountService accounts, CancellationToken ct) =>
+        {
+            var outcome = await accounts.UpdateProfileAsync(context.GetAccount().Id, request, ct);
+            return outcome.Result switch
+            {
+                UpdateProfileResult.Updated => Results.Ok(outcome.Account),
+                UpdateProfileResult.NameTaken => Results.Json(new { reason = "name_taken" }, statusCode: StatusCodes.Status409Conflict),
+                UpdateProfileResult.InvalidFormat => Results.Json(new { reason = "invalid_format" }, statusCode: StatusCodes.Status422UnprocessableEntity),
+                _ => Results.NotFound(),
+            };
         }).AddEndpointFilter<AccountAuthFilter>();
 
         // The one endpoint anywhere that returns a real character name/world - and only ever the
@@ -130,8 +139,7 @@ internal static class AuthEndpoints
                 }
 
                 var token = await accounts.IssueTokenAsync(account.Id, ct);
-                var summary = new AccountSummary(account.Id.ToString(), account.Handle, account.DisplayName, account.InviteCode);
-                return new AuthPollResponse(AuthPollStatus.Success, token, summary, null, isNew);
+                return new AuthPollResponse(AuthPollStatus.Success, token, AccountService.ToSummary(account), null, isNew);
 
             default:
                 flows.Remove(flowId);

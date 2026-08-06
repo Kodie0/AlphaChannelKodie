@@ -14,3 +14,5 @@ public sealed record ActivityEventDto(
 public sealed record ActivityPage(ActivityEventDto[] Items, string? NextCursor);
 
 public sealed record MarkActivityReadRequest(long UpToUnix);
+
+public sealed record UnreadCountResponse(int Count);

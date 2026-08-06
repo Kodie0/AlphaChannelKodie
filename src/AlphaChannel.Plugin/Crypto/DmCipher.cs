@@ -1,47 +1,106 @@
 using System.Security.Cryptography;
 using System.Text;
+using Org.BouncyCastle.Asn1.Sec;
+using Org.BouncyCastle.Crypto.Agreement;
+using Org.BouncyCastle.Crypto.Generators;
+using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Pkcs;
+using Org.BouncyCastle.Security;
+using Org.BouncyCastle.X509;
 
 namespace AlphaChannel.Plugin.Crypto;
 
-// Static-static ECDH (NIST P-521, the strongest curve .NET's BCL ships - no third-party crypto
-// dependency needed) between the two conversation participants' long-term identity keys derives
-// the same AES-256-GCM key on both ends independently; nothing is ever wrapped, rotated, or stored
-// server-side beyond the two public keys (see AlphaChannel.Server's DmMessage doc comment). This
-// means no forward secrecy (the same key covers the whole conversation's history unless a party
-// regenerates their identity key) - an accepted v1 simplification, not an oversight.
+// Long-term ECDH identity (NIST P-521). Managed via BouncyCastle so keygen/derive works under
+// Wine, where Windows CNG's ECDiffieHellman.Create(nistP521) throws CryptographicException
+// 0x80090029. Wire format stays SPKI / PKCS#8 so existing keys and the server stay compatible.
 //
-// Every message embeds a random 32-byte franking key ahead of the plaintext before encrypting, and
-// ships a separate HMAC-SHA512 "commitment tag" (of the franking key over the plaintext) alongside
-// the ciphertext in the clear. The server stores that tag but can never compute it itself. If this
-// message is later reported, revealing the plaintext + franking key lets the server verify the
-// reveal is genuine without ever having had the ability to decrypt on its own - see ReportEndpoints.
+// Shared AES key matches .NET's ECDiffieHellman.DeriveKeyFromHash(..., SHA512) with empty
+// prepend/append: SHA-512(Z) truncated to 32 bytes, where Z is the ECDH x-coordinate zero-padded
+// to the P-521 field size (see ECDiffieHellmanDerivation.DeriveKeyFromHash in dotnet/runtime).
+internal sealed class DmIdentity
+{
+    internal DmIdentity(ECPrivateKeyParameters privateKey, ECPublicKeyParameters publicKey)
+    {
+        PrivateKey = privateKey;
+        PublicKey = publicKey;
+    }
+
+    internal ECPrivateKeyParameters PrivateKey { get; }
+    internal ECPublicKeyParameters PublicKey { get; }
+}
+
+internal sealed class DmPublicKey(ECPublicKeyParameters publicKey)
+{
+    internal ECPublicKeyParameters PublicKey { get; } = publicKey;
+}
+
 internal static class DmCipher
 {
     private const int FrankingKeyLength = 32;
-    private const int AesKeyLength = 32; // AES-256
+    private const int AesKeyLength = 32;
     private const int NonceLength = 12;
     private const int TagLength = 16;
 
-    internal static ECDiffieHellman GenerateIdentity() => ECDiffieHellman.Create(ECCurve.NamedCurves.nistP521);
+    private static readonly SecureRandom SecureRandomSource = new();
+    private static readonly ECNamedDomainParameters P521 = CreateP521Domain();
 
-    internal static byte[] ExportPublicKey(ECDiffieHellman key) => key.ExportSubjectPublicKeyInfo();
-
-    internal static ECDiffieHellman ImportPublicKey(byte[] spki)
+    internal static DmIdentity GenerateIdentity()
     {
-        var key = ECDiffieHellman.Create();
-        key.ImportSubjectPublicKeyInfo(spki, out _);
-        return key;
+        var generator = new ECKeyPairGenerator();
+        generator.Init(new ECKeyGenerationParameters(P521, SecureRandomSource));
+        var pair = generator.GenerateKeyPair();
+        return new DmIdentity((ECPrivateKeyParameters)pair.Private, (ECPublicKeyParameters)pair.Public);
     }
 
-    // SHA-512-based NIST SP 800-56A Concat KDF (built into ECDiffieHellman.DeriveKeyFromHash) -
-    // truncated to 32 bytes for the AES-256 key. Deliberately the strongest hash the BCL offers for
-    // this derivation rather than SHA-256, per the "strongest available everywhere" steer.
-    private static byte[] DeriveSharedKey(ECDiffieHellman myPrivate, ECDiffieHellman otherPublic) =>
-        myPrivate.DeriveKeyFromHash(otherPublic.PublicKey, HashAlgorithmName.SHA512)[..AesKeyLength];
+    internal static byte[] ExportPublicKey(DmIdentity key) =>
+        SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(key.PublicKey).GetDerEncoded();
+
+    internal static byte[] ExportPrivateKey(DmIdentity key) =>
+        PrivateKeyInfoFactory.CreatePrivateKeyInfo(key.PrivateKey).GetDerEncoded();
+
+    internal static DmPublicKey ImportPublicKey(byte[] spki)
+    {
+        var parsed = PublicKeyFactory.CreateKey(spki);
+        if (parsed is not ECPublicKeyParameters publicKey || !IsP521(publicKey.Parameters))
+        {
+            throw new CryptographicException("DM public key is not a P-521 ECDH key.");
+        }
+
+        return new DmPublicKey(publicKey);
+    }
+
+    internal static DmIdentity ImportPrivateKey(byte[] pkcs8)
+    {
+        var parsed = PrivateKeyFactory.CreateKey(pkcs8);
+        if (parsed is not ECPrivateKeyParameters privateKey || !IsP521(privateKey.Parameters))
+        {
+            throw new CryptographicException("DM private key is not a P-521 ECDH key.");
+        }
+
+        var publicPoint = privateKey.Parameters.G.Multiply(privateKey.D).Normalize();
+        var publicKey = new ECPublicKeyParameters("ECDH", publicPoint, privateKey.Parameters);
+        return new DmIdentity(privateKey, publicKey);
+    }
+
+    private static byte[] DeriveSharedKey(DmIdentity myPrivate, DmPublicKey otherPublic)
+    {
+        var agreement = new ECDHBasicAgreement();
+        agreement.Init(myPrivate.PrivateKey);
+        var raw = agreement.CalculateAgreement(otherPublic.PublicKey).ToByteArrayUnsigned();
+        var fieldSize = agreement.GetFieldSize();
+        var z = new byte[fieldSize];
+        if (raw.Length > fieldSize)
+        {
+            throw new CryptographicException("ECDH agreement exceeded the P-521 field size.");
+        }
+
+        raw.CopyTo(z, fieldSize - raw.Length);
+        return SHA512.HashData(z)[..AesKeyLength];
+    }
 
     internal sealed record Sealed(byte[] Ciphertext, byte[] Nonce, byte[] Tag, byte[] CommitmentTag);
 
-    internal static Sealed Encrypt(ECDiffieHellman myPrivate, ECDiffieHellman otherPublic, string plaintext)
+    internal static Sealed Encrypt(DmIdentity myPrivate, DmPublicKey otherPublic, string plaintext)
     {
         var sharedKey = DeriveSharedKey(myPrivate, otherPublic);
         var frankingKey = RandomNumberGenerator.GetBytes(FrankingKeyLength);
@@ -65,9 +124,7 @@ internal static class DmCipher
 
     internal sealed record Opened(string Plaintext, byte[] FrankingKey);
 
-    // Returns null on any failure (wrong key, tampered ciphertext, corrupt data) rather than
-    // throwing - callers show "couldn't decrypt this message" instead of crashing the draw loop.
-    internal static Opened? Decrypt(ECDiffieHellman myPrivate, ECDiffieHellman otherPublic, byte[] ciphertext, byte[] nonce, byte[] tag)
+    internal static Opened? Decrypt(DmIdentity myPrivate, DmPublicKey otherPublic, byte[] ciphertext, byte[] nonce, byte[] tag)
     {
         try
         {
@@ -87,4 +144,18 @@ internal static class DmCipher
             return null;
         }
     }
+
+    private static ECNamedDomainParameters CreateP521Domain()
+    {
+        var parameters = SecNamedCurves.GetByOid(SecObjectIdentifiers.SecP521r1);
+        return new ECNamedDomainParameters(SecObjectIdentifiers.SecP521r1, parameters.Curve, parameters.G,
+            parameters.N, parameters.H, parameters.GetSeed());
+    }
+
+    private static bool IsP521(ECDomainParameters? parameters) =>
+        parameters is not null
+        && parameters.Curve.FieldSize == P521.Curve.FieldSize
+        && parameters.N.Equals(P521.N)
+        && parameters.H.Equals(P521.H)
+        && parameters.G.Normalize().Equals(P521.G.Normalize());
 }

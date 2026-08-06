@@ -34,12 +34,120 @@ internal sealed partial class MainWindow
     private bool onboardingWantsToSeeLalafellContent = true;
 
     private LinkedCharacterDto[]? myLinkedCharacters;
+    private string displayNameInput = string.Empty;
+    private string? lastDisplayNameSyncedFor;
+    private string? displayNameError;
+    private bool inviteCodeRefreshing;
+    private string onboardingNameInput = string.Empty;
+    private string? onboardingNameError;
+    private bool onboardingNameSubmitting;
+
+    private string? lastProfileSyncedFor;
+    private string? profileIconInput;
+    private string profileColorInput = "#9966FA";
+    private string profileBioInput = string.Empty;
+    private string profileStatusInput = string.Empty;
+    private bool profileSaving;
+    private string? profileError;
 
     private void DrawAccountSettings()
     {
         if (CurrentSession is { } session)
         {
-            ImGui.TextColored(Good, $"Signed in as @{session.Handle}");
+            // Syncs the input once per session change rather than every frame, so typing isn't
+            // fought by a field that keeps resetting to the server value mid-edit.
+            if (lastDisplayNameSyncedFor != session.AccountId)
+            {
+                displayNameInput = session.DisplayName;
+                lastDisplayNameSyncedFor = session.AccountId;
+            }
+
+            ImGui.TextColored(Good, $"Signed in as {session.DisplayName} (@{session.Handle})");
+
+            // DisplayName still equals the random Handle means onboarding never actually finished
+            // (dismissed early, or the modal closed for some other reason) - friends have no
+            // memorable name to search for until this is fixed, and it's otherwise a silent trap
+            // (the account works fine for everything except being findable).
+            if (session.DisplayName == session.Handle)
+            {
+                ImGui.TextColored(Danger, "You haven't picked a name yet - friends can't find or add you until you do. Set one below.");
+            }
+
+            var displayNameValid = DisplayNameRules.IsValid(displayNameInput);
+            using (displayNameValid ? default : ImRaii.PushColor(ImGuiCol.Text, Danger))
+            {
+                ImGui.SetNextItemWidth(200f);
+                ImGui.InputText("##displayName", ref displayNameInput, DisplayNameRules.MaxLength);
+            }
+
+            ImGui.SameLine();
+            using (ImRaii.Disabled(!displayNameValid || displayNameInput.Trim() == session.DisplayName))
+            {
+                if (ImGui.SmallButton("Save name"))
+                {
+                    var token = session.Token;
+                    var newName = displayNameInput.Trim();
+                    _ = Task.Run(async () =>
+                    {
+                        var outcome = await authClient.UpdateDisplayNameAsync(token, newName);
+                        if (outcome.Account is { } updated)
+                        {
+                            session.DisplayName = updated.DisplayName;
+                            onSessionChanged(session);
+                            displayNameError = null;
+                        }
+                        else
+                        {
+                            displayNameError = outcome.NameTaken
+                                ? "That name's already taken - try another."
+                                : outcome.InvalidFormat
+                                    ? "That name doesn't fit the rules below."
+                                    : "Couldn't save that name.";
+                        }
+                    });
+                }
+            }
+
+            ImGui.TextColored(MutedText,
+                $"{DisplayNameRules.MinLength}-{DisplayNameRules.MaxLength} characters: letters, numbers, single spaces, _ or -.");
+            if (displayNameError is { Length: > 0 } nameError)
+            {
+                ImGui.TextColored(Danger, nameError);
+            }
+
+            ImGui.Spacing();
+            ImGui.TextColored(MutedText, "Your invite code - share it (Discord, voice chat) and whoever redeems it becomes an instant friend, no name search needed:");
+            var inviteCodeDisplay = session.InviteCode;
+            ImGui.SetNextItemWidth(120f);
+            ImGui.InputText("##inviteCode", ref inviteCodeDisplay, 16, ImGuiInputTextFlags.ReadOnly);
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Copy code"))
+            {
+                ImGui.SetClipboardText(session.InviteCode);
+            }
+
+            ImGui.SameLine();
+            using (ImRaii.Disabled(inviteCodeRefreshing))
+            {
+                if (ImGui.SmallButton("Refresh"))
+                {
+                    inviteCodeRefreshing = true;
+                    var token = session.Token;
+                    _ = Task.Run(async () =>
+                    {
+                        var summary = await authClient.GetMeAsync(token);
+                        inviteCodeRefreshing = false;
+                        if (summary is not null)
+                        {
+                            session.InviteCode = summary.InviteCode;
+                            onSessionChanged(session);
+                        }
+                    });
+                }
+            }
+
+            ImGui.TextColored(MutedText, "Rotates automatically each time someone redeems it, so an old shared copy stops working - hit Refresh to see the current one.");
+
             if (ImGui.Button("Sign out"))
             {
                 _ = authClient.RevokeAsync(session.Token);
@@ -60,6 +168,11 @@ internal sealed partial class MainWindow
                     ImGui.BulletText($"{character.CharacterName} @ {character.World}" + (character.IsPrimary ? " (primary)" : ""));
                 }
             }
+
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+            DrawProfileEditor(session);
         }
         else
         {
@@ -94,6 +207,78 @@ internal sealed partial class MainWindow
         {
             ImGui.TextColored(Danger, failure);
         }
+    }
+
+    private void DrawProfileEditor(CharacterSession session)
+    {
+        if (lastProfileSyncedFor != session.AccountId)
+        {
+            profileIconInput = session.AvatarIcon;
+            profileColorInput = session.AvatarColorHex;
+            profileBioInput = session.Bio ?? string.Empty;
+            profileStatusInput = session.StatusMessage ?? string.Empty;
+            lastProfileSyncedFor = session.AccountId;
+        }
+
+        SectionHeader("Profile");
+        DrawAvatarChip(profileIconInput, profileColorInput, 48);
+        ImGui.SameLine();
+        ImGui.TextColored(MutedText, "Shown next to your name everywhere - Friends, Alpha Chat, Tweeter.");
+
+        ImGui.Spacing();
+        ImGui.TextColored(MutedText, "Icon");
+        DrawIconPicker(ref profileIconInput);
+
+        ImGui.Spacing();
+        ImGui.TextColored(MutedText, "Color");
+        DrawColorPicker(ref profileColorInput);
+
+        ImGui.Spacing();
+        ImGui.SetNextItemWidth(300f);
+        ImGui.InputTextWithHint("##status", "Status (e.g. \"LFG\", \"AFK\")", ref profileStatusInput, 64);
+
+        ImGui.SetNextItemWidth(300f);
+        ImGui.InputTextMultiline("##bio", ref profileBioInput, 160, new Vector2(300, 60));
+
+        ImGui.Spacing();
+        using (ImRaii.Disabled(profileSaving))
+        {
+            if (ImGui.Button(profileSaving ? "Saving..." : "Save profile"))
+            {
+                SaveProfile(session);
+            }
+        }
+
+        if (profileError is { Length: > 0 } error)
+        {
+            ImGui.TextColored(Danger, error);
+        }
+    }
+
+    private void SaveProfile(CharacterSession session)
+    {
+        var token = session.Token;
+        var request = new UpdateProfileRequest(null, profileIconInput, profileColorInput, profileBioInput, profileStatusInput);
+
+        profileSaving = true;
+        profileError = null;
+        _ = Task.Run(async () =>
+        {
+            var outcome = await authClient.UpdateProfileAsync(token, request);
+            profileSaving = false;
+            if (outcome.Account is { } updated)
+            {
+                session.AvatarIcon = updated.AvatarIcon;
+                session.AvatarColorHex = updated.AvatarColorHex;
+                session.Bio = updated.Bio;
+                session.StatusMessage = updated.StatusMessage;
+                onSessionChanged(session);
+            }
+            else
+            {
+                profileError = "Couldn't save your profile.";
+            }
+        });
     }
 
     private void StartSignIn(CharacterSession? linkUsing)
@@ -136,6 +321,9 @@ internal sealed partial class MainWindow
                     pendingOnboardingSession = result.Session;
                     onboardingRaces.Clear();
                     onboardingWantsToSeeLalafellContent = true;
+                    onboardingNameInput = string.Empty;
+                    onboardingNameError = null;
+                    onboardingNameSubmitting = false;
                     signInState = SignInState.Onboarding;
                     break;
                 case SignInOutcome.Success:
@@ -160,13 +348,43 @@ internal sealed partial class MainWindow
             return;
         }
 
+        var name = onboardingNameInput.Trim();
+        if (!DisplayNameRules.IsValid(name))
+        {
+            onboardingNameError = "Pick a name so friends can find you.";
+            return;
+        }
+
         var races = onboardingRaces.ToArray();
         var wantsToSeeLalafellContent = onboardingWantsToSeeLalafellContent;
-        signInState = SignInState.Succeeded;
-        onSessionChanged(session);
-        pendingOnboardingSession = null;
+        onboardingNameError = null;
+        onboardingNameSubmitting = true;
 
-        _ = Task.Run(() => authClient.SubmitOnboardingAsync(session.Token, races, wantsToSeeLalafellContent));
+        _ = Task.Run(async () =>
+        {
+            // The gamer tag is what other players actually search/add by (see FriendService.
+            // FindAccountByDisplayNameAsync), so it has to be reserved before onboarding can finish -
+            // unlike races/Lalafell-visibility below, which are fire-and-forget preferences.
+            var outcome = await authClient.UpdateDisplayNameAsync(session.Token, name);
+            if (outcome.Account is not { } updated)
+            {
+                onboardingNameError = outcome.NameTaken
+                    ? "That name's already taken - try another."
+                    : outcome.InvalidFormat
+                        ? "That name doesn't fit the rules above."
+                        : "Couldn't save that name, try again.";
+                onboardingNameSubmitting = false;
+                return;
+            }
+
+            session.DisplayName = updated.DisplayName;
+            await authClient.SubmitOnboardingAsync(session.Token, races, wantsToSeeLalafellContent);
+
+            signInState = SignInState.Succeeded;
+            onSessionChanged(session);
+            pendingOnboardingSession = null;
+            onboardingNameSubmitting = false;
+        });
     }
 
     private void DrawSignInModal()
@@ -214,6 +432,23 @@ internal sealed partial class MainWindow
             case SignInState.Onboarding:
                 ImGui.TextColored(Good, "Signed in! A couple of quick questions:");
                 ImGui.Spacing();
+                ImGui.TextWrapped("Pick a gamer tag - this is what friends search for and see everywhere (not your character name).");
+                var onboardingNameValid = DisplayNameRules.IsValid(onboardingNameInput);
+                ImGui.SetNextItemWidth(-1f);
+                using (ImRaii.Disabled(onboardingNameSubmitting))
+                using (onboardingNameValid || onboardingNameInput.Length == 0 ? default : ImRaii.PushColor(ImGuiCol.Text, Danger))
+                {
+                    ImGui.InputText("##onboardingName", ref onboardingNameInput, DisplayNameRules.MaxLength);
+                }
+
+                ImGui.TextColored(MutedText,
+                    $"{DisplayNameRules.MinLength}-{DisplayNameRules.MaxLength} characters: letters, numbers, single spaces, _ or -.");
+                if (onboardingNameError is { Length: > 0 } nameOnboardError)
+                {
+                    ImGui.TextColored(Danger, nameOnboardError);
+                }
+
+                ImGui.Spacing();
                 ImGui.TextWrapped("Which races do you play? (optional)");
                 foreach (var race in KnownRaces)
                 {
@@ -236,9 +471,12 @@ internal sealed partial class MainWindow
                 ImGui.Checkbox("Yes, show me Lalafell content", ref onboardingWantsToSeeLalafellContent);
 
                 ImGui.Spacing();
-                if (ImGui.Button("Done"))
+                using (ImRaii.Disabled(!onboardingNameValid || onboardingNameSubmitting))
                 {
-                    SubmitOnboarding();
+                    if (ImGui.Button(onboardingNameSubmitting ? "Saving..." : "Done"))
+                    {
+                        SubmitOnboarding();
+                    }
                 }
 
                 break;

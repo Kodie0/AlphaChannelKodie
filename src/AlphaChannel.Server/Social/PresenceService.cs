@@ -9,7 +9,8 @@ namespace AlphaChannel.Server.Social;
 // watch-along state changes - IDbContextFactory for the same reason as every other service here.
 // Presence itself is never stored: this only ever pushes a freshly-computed PresenceLabels result,
 // the same live query GET /friends already uses for the pull case.
-internal sealed class PresenceService(IDbContextFactory<AlphaChannelDbContext> dbFactory, UserDirectory directory, RoomManager rooms)
+internal sealed class PresenceService(
+    IDbContextFactory<AlphaChannelDbContext> dbFactory, UserDirectory directory, RoomManager rooms, Live.LiveDirectory liveDirectory)
 {
     // Cheap in-memory dedup, checked before anything DB-touching runs - stream.state publishes
     // every tick with no diff-check (see ConnectionHandler's own comment on why), so NotifyAsync
@@ -19,7 +20,7 @@ internal sealed class PresenceService(IDbContextFactory<AlphaChannelDbContext> d
 
     public async Task NotifyAsync(string accountIdString, bool online, CancellationToken cancellationToken)
     {
-        var watchingLabel = online ? PresenceLabels.WatchingLabel(accountIdString, rooms, directory) : null;
+        var watchingLabel = online ? PresenceLabels.WatchingLabel(accountIdString, rooms, directory, liveDirectory) : null;
         var current = (online, watchingLabel);
         if (lastPushed.TryGetValue(accountIdString, out var previous) && previous == current)
         {
@@ -73,6 +74,22 @@ internal sealed class PresenceService(IDbContextFactory<AlphaChannelDbContext> d
                 Online = online,
                 WatchingLabel = watchingLabel,
             }, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    // Pushes the current UserDirectory.OnlineCount to every connected client so the plugin UI can
+    // show a global "users online" figure next to friends-online without polling.
+    public async Task BroadcastOnlineCountAsync(CancellationToken cancellationToken)
+    {
+        var message = new SocialControl
+        {
+            Type = SocialSignalType.OnlineCount,
+            OnlineCount = directory.OnlineCount,
+        };
+
+        foreach (var socket in directory.ConnectedSockets())
+        {
+            await SocketSend.SendAsync(socket, message, cancellationToken).ConfigureAwait(false);
         }
     }
 }

@@ -5,8 +5,10 @@ using AlphaChannel.Server;
 using AlphaChannel.Server.Admin;
 using AlphaChannel.Server.Auth;
 using AlphaChannel.Server.Data;
+using AlphaChannel.Server.Live;
 using AlphaChannel.Server.Moderation;
 using AlphaChannel.Server.Social;
+using AlphaChannel.Server.Twitch;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -47,6 +49,20 @@ builder.Services.AddScoped<ModerationAdminService>();
 builder.Services.AddScoped<LalafellGateFilter>();
 builder.Services.AddScoped<LalafellReviewService>();
 builder.Services.AddScoped<AdminTokenFilter>();
+builder.Services.AddScoped<PluginHubService>();
+builder.Services.AddScoped<VenueService>();
+builder.Services.AddSingleton<LiveDirectory>();
+builder.Services.AddScoped<LiveService>();
+builder.Services.AddScoped<MediaWebhookFilter>();
+
+builder.Services.AddSingleton(new TwitchOptions
+{
+    ClientId = builder.Configuration["TWITCH_CLIENT_ID"] ?? string.Empty,
+    ClientSecret = builder.Configuration["TWITCH_CLIENT_SECRET"] ?? string.Empty,
+});
+builder.Services.AddHttpClient<TwitchHelixClient>();
+builder.Services.AddSingleton<TwitchTrendingService>();
+builder.Services.AddHostedService<TwitchTrendingRefreshService>();
 
 var app = builder.Build();
 app.UseWebSockets();
@@ -69,6 +85,10 @@ app.MapReportEndpoints();
 app.MapModerationAdminEndpoints();
 app.MapLalafellAdminEndpoints();
 app.MapAdminUiEndpoint();
+app.MapPluginHubEndpoints();
+app.MapVenueEndpoints();
+app.MapLiveEndpoints();
+app.MapTwitchEndpoints();
 
 app.Map("/rt", async (HttpContext context, ConnectionHandler handler, AccountService accounts) =>
 {

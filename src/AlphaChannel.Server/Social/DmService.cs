@@ -4,65 +4,122 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlphaChannel.Server.Social;
 
-internal enum StartConversationResult
+internal enum CreateConversationResult
 {
     Ok,
     NotFriends,
-    NotFound,
+    Blocked,
+    InvalidMembers,
 }
 
-// Server-blind relay for E2E DMs - every method here only ever touches ciphertext/nonce/tag/
-// ConversationId/AccountId, never plaintext or a key. See DmMessage's doc comment for the crypto
-// scheme (static-static ECDH, no server-side key material at all) and KeyEndpoints for the two
+// Server-blind relay for E2E DMs and group chats - every method here only ever touches ciphertext/
+// nonce/tag/ConversationId/AccountId, never plaintext or a key. See DmMessage's doc comment for the
+// crypto scheme (static-static ECDH + sender-side fan-out for groups) and KeyEndpoints for the two
 // public-key endpoints this depends on.
 internal sealed class DmService(IDbContextFactory<AlphaChannelDbContext> dbFactory, UserDirectory directory)
 {
-    // DMs require an existing accepted friendship - simplest, safest default given there's no
-    // separate spam/rate-limit system beyond friends+blocks in v1.
-    public async Task<(StartConversationResult Result, Guid? ConversationId)> StartConversationAsync(
-        Guid callerId, Guid otherId, CancellationToken cancellationToken)
+    private const int MessagePageLimit = 50;
+
+    // Requires an existing accepted friendship with every member being added - simplest, safest
+    // default given there's no separate spam/rate-limit system beyond friends+blocks. A single
+    // member reuses (or creates) the one 1:1 conversation with that pair, same "start or resume"
+    // behavior as before; two or more members always creates a brand-new group - unlike a 1:1,
+    // there's no natural "the" group for a given member set, so no dedup.
+    public async Task<(CreateConversationResult Result, Guid? ConversationId)> CreateConversationAsync(
+        Guid callerId, string[] memberAccountIds, string? name, CancellationToken cancellationToken)
     {
+        var memberIds = memberAccountIds.Distinct().Where(id => id != callerId.ToString())
+            .Select(id => Guid.TryParse(id, out var g) ? g : (Guid?)null).ToList();
+        if (memberIds.Count == 0 || memberIds.Any(id => id is null))
+        {
+            return (CreateConversationResult.InvalidMembers, null);
+        }
+
+        var members = memberIds.Select(id => id!.Value).ToList();
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
-        var isFriend = await db.Friendships.AnyAsync(f =>
-            f.Status == FriendshipStatus.Accepted &&
-            ((f.RequesterAccountId == callerId && f.AddresseeAccountId == otherId) ||
-             (f.RequesterAccountId == otherId && f.AddresseeAccountId == callerId)), cancellationToken);
-        if (!isFriend)
+        foreach (var memberId in members)
         {
-            return (StartConversationResult.NotFriends, null);
+            var isFriend = await db.Friendships.AnyAsync(f =>
+                f.Status == FriendshipStatus.Accepted &&
+                ((f.RequesterAccountId == callerId && f.AddresseeAccountId == memberId) ||
+                 (f.RequesterAccountId == memberId && f.AddresseeAccountId == callerId)), cancellationToken);
+            if (!isFriend)
+            {
+                return (CreateConversationResult.NotFriends, null);
+            }
+
+            if (await IsBlockedEitherWayAsync(db, callerId, memberId, cancellationToken))
+            {
+                return (CreateConversationResult.Blocked, null);
+            }
         }
 
-        var (lowId, highId) = CanonicalPair(callerId, otherId);
-        var conversation = await db.DmConversations.FirstOrDefaultAsync(
-            c => c.AccountAId == lowId && c.AccountBId == highId, cancellationToken);
-
-        if (conversation is not null)
+        var isGroup = members.Count > 1;
+        if (!isGroup)
         {
-            return (StartConversationResult.Ok, conversation.Id);
+            var otherId = members[0];
+            var myConversationIds = await db.ConversationMembers.Where(m => m.AccountId == callerId)
+                .Select(m => m.ConversationId).ToListAsync(cancellationToken);
+            var sharedConversationIds = await db.ConversationMembers
+                .Where(m => m.AccountId == otherId && myConversationIds.Contains(m.ConversationId))
+                .Select(m => m.ConversationId).ToListAsync(cancellationToken);
+
+            var existingId = await db.Conversations
+                .Where(c => sharedConversationIds.Contains(c.Id) && !c.IsGroup)
+                .Select(c => (Guid?)c.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (existingId is { } found)
+            {
+                return (CreateConversationResult.Ok, found);
+            }
         }
 
-        conversation = new DmConversation { Id = Guid.NewGuid(), AccountAId = lowId, AccountBId = highId, CreatedAtUtc = DateTime.UtcNow };
-        db.DmConversations.Add(conversation);
+        var conversation = new Conversation
+        {
+            Id = Guid.NewGuid(),
+            IsGroup = isGroup,
+            Name = isGroup ? (string.IsNullOrWhiteSpace(name) ? "Group chat" : name.Trim()[..Math.Min(name.Trim().Length, 48)]) : null,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        db.Conversations.Add(conversation);
+
+        var now = DateTime.UtcNow;
+        db.ConversationMembers.Add(new ConversationMember { Id = Guid.NewGuid(), ConversationId = conversation.Id, AccountId = callerId, JoinedAtUtc = now });
+        foreach (var memberId in members)
+        {
+            db.ConversationMembers.Add(new ConversationMember { Id = Guid.NewGuid(), ConversationId = conversation.Id, AccountId = memberId, JoinedAtUtc = now });
+        }
+
         await db.SaveChangesAsync(cancellationToken);
-        return (StartConversationResult.Ok, conversation.Id);
+        return (CreateConversationResult.Ok, conversation.Id);
     }
 
     public async Task<List<ConversationSummaryDto>> GetConversationsAsync(Guid accountId, CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var conversations = await db.DmConversations
-            .Where(c => c.AccountAId == accountId || c.AccountBId == accountId)
-            .ToListAsync(cancellationToken);
 
-        var otherIds = conversations.Select(c => c.AccountAId == accountId ? c.AccountBId : c.AccountAId).ToList();
-        var others = (await db.Accounts.Where(a => otherIds.Contains(a.Id)).ToListAsync(cancellationToken)).ToDictionary(a => a.Id);
+        var myMemberships = await db.ConversationMembers.Where(m => m.AccountId == accountId).ToListAsync(cancellationToken);
+        var conversationIds = myMemberships.Select(m => m.ConversationId).ToList();
+        var conversations = await db.Conversations.Where(c => conversationIds.Contains(c.Id)).ToListAsync(cancellationToken);
+
+        var otherMembers = await db.ConversationMembers
+            .Where(m => conversationIds.Contains(m.ConversationId) && m.AccountId != accountId)
+            .ToListAsync(cancellationToken);
+        var otherAccountIds = otherMembers.Select(m => m.AccountId).Distinct().ToList();
+        var accounts = (await db.Accounts.Where(a => otherAccountIds.Contains(a.Id)).ToListAsync(cancellationToken)).ToDictionary(a => a.Id);
+
+        var myCursorByConversation = myMemberships.ToDictionary(m => m.ConversationId, m => m.LastReadAtUtc ?? DateTime.MinValue);
 
         var result = new List<ConversationSummaryDto>();
         foreach (var conversation in conversations)
         {
-            var otherId = conversation.AccountAId == accountId ? conversation.AccountBId : conversation.AccountAId;
-            if (!others.TryGetValue(otherId, out var other))
+            var members = otherMembers
+                .Where(m => m.ConversationId == conversation.Id && accounts.ContainsKey(m.AccountId))
+                .Select(m => new ConversationMemberDto(m.AccountId.ToString(), accounts[m.AccountId].Handle, accounts[m.AccountId].DisplayName))
+                .ToArray();
+            if (members.Length == 0)
             {
                 continue;
             }
@@ -72,134 +129,197 @@ internal sealed class DmService(IDbContextFactory<AlphaChannelDbContext> dbFacto
                 .OrderByDescending(m => m.SentAtUtc)
                 .Select(m => (DateTime?)m.SentAtUtc)
                 .FirstOrDefaultAsync(cancellationToken);
-            var unread = await db.DmMessages.CountAsync(
-                m => m.ConversationId == conversation.Id && m.SenderAccountId != accountId && m.ReadAtUtc == null, cancellationToken);
+
+            var myCursor = myCursorByConversation[conversation.Id];
+            var unread = await db.DmMessages
+                .Where(m => m.ConversationId == conversation.Id && m.RecipientAccountId == accountId && m.SentAtUtc > myCursor)
+                .Select(m => m.GroupId).Distinct().CountAsync(cancellationToken);
 
             result.Add(new ConversationSummaryDto(
-                conversation.Id.ToString(), other.Id.ToString(), other.Handle, other.DisplayName,
+                conversation.Id.ToString(), conversation.IsGroup, conversation.Name, members,
                 lastMessageAt is { } sent ? ToUnixSeconds(sent) : null, unread));
         }
 
         return result.OrderByDescending(c => c.LastMessageAtUnix ?? 0).ToList();
     }
 
-    public async Task<MessagePage?> GetMessagesAsync(Guid conversationId, Guid callerId, long? beforeUnix, CancellationToken cancellationToken)
+    public async Task<MessagePage?> GetMessagesAsync(Guid conversationId, Guid viewerId, long? beforeUnix, CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var conversation = await db.DmConversations.FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
-        if (conversation is null || (conversation.AccountAId != callerId && conversation.AccountBId != callerId))
+        var membership = await db.ConversationMembers.FirstOrDefaultAsync(m => m.ConversationId == conversationId && m.AccountId == viewerId, cancellationToken);
+        if (membership is null)
         {
             return null;
         }
 
-        const int limit = 50;
-        var query = db.DmMessages.Where(m => m.ConversationId == conversationId);
+        var conversation = await db.Conversations.FirstAsync(c => c.Id == conversationId, cancellationToken);
+
+        var relevantQuery = db.DmMessages.Where(m =>
+            m.ConversationId == conversationId && (m.RecipientAccountId == viewerId || m.SenderAccountId == viewerId));
         if (beforeUnix is { } before)
         {
             var beforeDate = DateTimeOffset.FromUnixTimeSeconds(before).UtcDateTime;
-            query = query.Where(m => m.SentAtUtc < beforeDate);
+            relevantQuery = relevantQuery.Where(m => m.SentAtUtc < beforeDate);
         }
 
-        var messages = await query.OrderByDescending(m => m.SentAtUtc).Take(limit + 1).ToListAsync(cancellationToken);
-        var hasMore = messages.Count > limit;
-        messages = messages.Take(limit).ToList();
+        // Paginate by distinct logical message (GroupId), not physical row - a group message the
+        // viewer sent has one physical row per other recipient, all sharing a GroupId and an
+        // identical SentAtUtc (see DmMessage's doc comment).
+        var page = await relevantQuery
+            .GroupBy(m => m.GroupId)
+            .Select(g => new { GroupId = g.Key, SentAtUtc = g.Max(m => m.SentAtUtc) })
+            .OrderByDescending(g => g.SentAtUtc)
+            .Take(MessagePageLimit + 1)
+            .ToListAsync(cancellationToken);
 
-        var items = messages.Select(ToDto).ToArray();
-        var nextCursor = hasMore && messages.Count > 0 ? ToUnixSeconds(messages[^1].SentAtUtc).ToString() : null;
+        var hasMore = page.Count > MessagePageLimit;
+        page = page.Take(MessagePageLimit).ToList();
+        var pageGroupIds = page.Select(g => g.GroupId).ToHashSet();
+
+        var rows = await relevantQuery.Where(m => pageGroupIds.Contains(m.GroupId)).ToListAsync(cancellationToken);
+
+        // The viewer's own addressed copy if they're a recipient; otherwise (they're the sender)
+        // the deterministic-lowest-RecipientAccountId row, so this always agrees with whichever row
+        // SendMessageAsync returned them at send time (see that method's own comment).
+        var representative = rows.GroupBy(m => m.GroupId)
+            .Select(g => g.FirstOrDefault(m => m.RecipientAccountId == viewerId) ?? g.OrderBy(m => m.RecipientAccountId).First())
+            .OrderByDescending(m => m.SentAtUtc)
+            .ToList();
+
+        DateTime? otherMemberLastRead = null;
+        if (!conversation.IsGroup)
+        {
+            var otherMember = await db.ConversationMembers.FirstOrDefaultAsync(m => m.ConversationId == conversationId && m.AccountId != viewerId, cancellationToken);
+            otherMemberLastRead = otherMember?.LastReadAtUtc;
+        }
+
+        var items = representative.Select(m => ToDto(m, viewerId, conversation.IsGroup, otherMemberLastRead)).ToArray();
+        var nextCursor = hasMore && representative.Count > 0 ? ToUnixSeconds(representative[^1].SentAtUtc).ToString() : null;
         return new MessagePage(items, nextCursor);
     }
 
-    public async Task<MessageDto?> SendMessageAsync(
-        Guid conversationId, Guid senderId, SendMessageRequest request, CancellationToken cancellationToken)
+    public async Task<MessageDto?> SendMessageAsync(Guid conversationId, Guid senderId, SendMessageRequest request, CancellationToken cancellationToken)
     {
+        if (request.Envelopes.Length == 0)
+        {
+            return null;
+        }
+
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var conversation = await db.DmConversations.FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
-        if (conversation is null || (conversation.AccountAId != senderId && conversation.AccountBId != senderId))
+        var conversation = await db.Conversations.FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
+        if (conversation is null)
         {
             return null;
         }
 
-        var recipientId = conversation.AccountAId == senderId ? conversation.AccountBId : conversation.AccountAId;
-
-        var blocked = await db.Blocks.AnyAsync(b =>
-            (b.BlockerAccountId == senderId && b.BlockedAccountId == recipientId) ||
-            (b.BlockerAccountId == recipientId && b.BlockedAccountId == senderId), cancellationToken);
-        if (blocked)
+        var allMemberIds = await db.ConversationMembers.Where(m => m.ConversationId == conversationId).Select(m => m.AccountId).ToListAsync(cancellationToken);
+        if (!allMemberIds.Contains(senderId))
         {
             return null;
         }
 
-        var message = new DmMessage
+        var expectedRecipients = allMemberIds.Where(id => id != senderId).ToHashSet();
+        var envelopeRecipients = new HashSet<Guid>();
+        foreach (var envelope in request.Envelopes)
+        {
+            if (!Guid.TryParse(envelope.RecipientAccountId, out var recipientId))
+            {
+                return null;
+            }
+
+            envelopeRecipients.Add(recipientId);
+        }
+
+        // Exactly one envelope per other member, no more, no less - a partial fan-out would leave
+        // some members permanently unable to decrypt this message.
+        if (!envelopeRecipients.SetEquals(expectedRecipients))
+        {
+            return null;
+        }
+
+        foreach (var recipientId in expectedRecipients)
+        {
+            if (await IsBlockedEitherWayAsync(db, senderId, recipientId, cancellationToken))
+            {
+                return null;
+            }
+        }
+
+        var groupId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var rows = request.Envelopes.Select(e => new DmMessage
         {
             Id = Guid.NewGuid(),
+            GroupId = groupId,
             ConversationId = conversationId,
             SenderAccountId = senderId,
-            Ciphertext = Convert.FromBase64String(request.Ciphertext),
-            Nonce = Convert.FromBase64String(request.Nonce),
-            Tag = Convert.FromBase64String(request.Tag),
-            CommitmentTag = Convert.FromBase64String(request.CommitmentTag),
-            SentAtUtc = DateTime.UtcNow,
-        };
-        db.DmMessages.Add(message);
+            RecipientAccountId = Guid.Parse(e.RecipientAccountId),
+            Ciphertext = Convert.FromBase64String(e.Ciphertext),
+            Nonce = Convert.FromBase64String(e.Nonce),
+            Tag = Convert.FromBase64String(e.Tag),
+            CommitmentTag = Convert.FromBase64String(e.CommitmentTag),
+            SentAtUtc = now,
+        }).ToList();
+        db.DmMessages.AddRange(rows);
         await db.SaveChangesAsync(cancellationToken);
 
-        var dto = ToDto(message);
-
-        // Real-time push of the actual ciphertext to the recipient's live socket if they're
-        // connected - AlphaChannel already tracks a per-account socket in UserDirectory for
-        // watch-along, so pushing real content directly is simpler than Aetherphone's ping-then-
-        // REST-refetch pattern (which exists there to work around a separate call-only socket).
-        if (directory.TryGetSocket(recipientId.ToString(), out var socket) && socket is not null)
+        foreach (var row in rows)
         {
-            await SocketSend.SendAsync(socket, new SocialControl
+            if (directory.TryGetSocket(row.RecipientAccountId.ToString(), out var socket) && socket is not null)
             {
-                Type = SocialSignalType.DmMessage,
-                AccountId = senderId.ToString(),
-                ConversationId = conversationId.ToString(),
-                MessageId = message.Id.ToString(),
-                Ciphertext = request.Ciphertext,
-                Nonce = request.Nonce,
-                Tag = request.Tag,
-                CommitmentTag = request.CommitmentTag,
-                TimestampUnix = ToUnixSeconds(message.SentAtUtc),
-            }, cancellationToken).ConfigureAwait(false);
+                await SocketSend.SendAsync(socket, new SocialControl
+                {
+                    Type = SocialSignalType.DmMessage,
+                    AccountId = senderId.ToString(),
+                    ConversationId = conversationId.ToString(),
+                    MessageId = row.Id.ToString(),
+                    Ciphertext = Convert.ToBase64String(row.Ciphertext),
+                    Nonce = Convert.ToBase64String(row.Nonce),
+                    Tag = Convert.ToBase64String(row.Tag),
+                    CommitmentTag = Convert.ToBase64String(row.CommitmentTag),
+                    TimestampUnix = ToUnixSeconds(row.SentAtUtc),
+                }, cancellationToken).ConfigureAwait(false);
+            }
         }
 
-        return dto;
+        // Deterministic-lowest-RecipientAccountId, matching GetMessagesAsync's own representative
+        // pick for a message the viewer sent - same Id shows up on reload, not an arbitrary one.
+        var representative = rows.OrderBy(m => m.RecipientAccountId).First();
+        return ToDto(representative, senderId, conversation.IsGroup, otherMemberLastReadAtUtc: null);
     }
 
     public async Task MarkReadAsync(Guid conversationId, Guid callerId, CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var unread = await db.DmMessages
-            .Where(m => m.ConversationId == conversationId && m.SenderAccountId != callerId && m.ReadAtUtc == null)
-            .ToListAsync(cancellationToken);
-
-        if (unread.Count == 0)
+        var membership = await db.ConversationMembers.FirstOrDefaultAsync(m => m.ConversationId == conversationId && m.AccountId == callerId, cancellationToken);
+        if (membership is null)
         {
             return;
         }
 
-        var now = DateTime.UtcNow;
-        foreach (var message in unread)
-        {
-            message.ReadAtUtc = now;
-        }
-
+        membership.LastReadAtUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
     }
 
-    private static MessageDto ToDto(DmMessage message) => new(
-        message.Id.ToString(),
-        message.SenderAccountId.ToString(),
-        Convert.ToBase64String(message.Ciphertext),
-        Convert.ToBase64String(message.Nonce),
-        Convert.ToBase64String(message.Tag),
-        ToUnixSeconds(message.SentAtUtc),
-        message.ReadAtUtc is { } read ? ToUnixSeconds(read) : null);
+    // ReadAtUnix is only meaningful for a message the viewer themselves sent, in a 1:1 conversation
+    // (a group has no single "the other member" whose read cursor would apply) - see MessageDto's
+    // own doc comment.
+    private static MessageDto ToDto(DmMessage message, Guid viewerId, bool isGroup, DateTime? otherMemberLastReadAtUtc)
+    {
+        long? readAtUnix = null;
+        if (!isGroup && message.SenderAccountId == viewerId && otherMemberLastReadAtUtc is { } read && read >= message.SentAtUtc)
+        {
+            readAtUnix = ToUnixSeconds(read);
+        }
 
-    private static (Guid Low, Guid High) CanonicalPair(Guid a, Guid b) =>
-        a.CompareTo(b) <= 0 ? (a, b) : (b, a);
+        return new MessageDto(
+            message.Id.ToString(), message.GroupId.ToString(), message.SenderAccountId.ToString(), message.RecipientAccountId.ToString(),
+            Convert.ToBase64String(message.Ciphertext), Convert.ToBase64String(message.Nonce), Convert.ToBase64String(message.Tag),
+            ToUnixSeconds(message.SentAtUtc), readAtUnix);
+    }
+
+    private static Task<bool> IsBlockedEitherWayAsync(AlphaChannelDbContext db, Guid a, Guid b, CancellationToken cancellationToken) =>
+        db.Blocks.AnyAsync(x => (x.BlockerAccountId == a && x.BlockedAccountId == b) || (x.BlockerAccountId == b && x.BlockedAccountId == a), cancellationToken);
 
     private static long ToUnixSeconds(DateTime utc) => new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc)).ToUnixTimeSeconds();
 }

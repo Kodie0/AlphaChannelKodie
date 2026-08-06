@@ -19,6 +19,7 @@ internal sealed class ConnectionHandler(
         string? viewingHostId = null;
         directory.Connected(userId, socket);
         await presence.NotifyAsync(userId, online: true, token).ConfigureAwait(false);
+        await presence.BroadcastOnlineCountAsync(token).ConfigureAwait(false);
 
         try
         {
@@ -202,6 +203,7 @@ internal sealed class ConnectionHandler(
             // Room state above is already torn down/updated, so this correctly computes "offline"
             // (PresenceLabels won't find this userId hosting or viewing anything anymore).
             await presence.NotifyAsync(userId, online: false, CancellationToken.None).ConfigureAwait(false);
+            await presence.BroadcastOnlineCountAsync(CancellationToken.None).ConfigureAwait(false);
         }
     }
 

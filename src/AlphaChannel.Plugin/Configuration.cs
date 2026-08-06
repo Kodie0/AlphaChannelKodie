@@ -48,6 +48,13 @@ internal sealed class Configuration : IPluginConfiguration
     // is defense-in-depth against other local processes, not network protection.
     public Dictionary<string, string> DmPrivateKeys { get; set; } = new();
 
+    // Keyed by AccountId, same reasoning as DmPrivateKeys - a locally-cached copy of the raw stream
+    // key purely for convenience redisplay on the Go Live page (the server only ever stores a hash,
+    // see Server/Data/Entities.cs's StreamKey). If this local cache is ever lost, the only recovery
+    // is hitting Regenerate - that's acceptable one-time friction, not a bug, since regenerating
+    // also instantly invalidates anyone else's copy of the old key.
+    public Dictionary<string, string> StreamKeys { get; set; } = new();
+
     public int Volume { get; set; } = 100;
     public bool Muted { get; set; }
 
@@ -68,6 +75,18 @@ internal sealed class Configuration : IPluginConfiguration
 
     public List<VideoQueueRecord> VideoQueue { get; set; } = new();
     public List<ScreenPositionPreset> ScreenPresets { get; set; } = new();
+
+    // Plugin window chrome palette - see UiTheme.cs / ThemeCatalog. Defaults to Purple (mockup).
+    public UiTheme UiTheme { get; set; } = UiTheme.Purple;
+
+    // Persist native /tell history per character under the plugin config directory (Whispers/).
+    // Off = session-only mirror; on = Linkpearl-style archive (default).
+    public bool ArchiveWhispersToDisk { get; set; } = true;
+
+    // Last placements for the full window and the minimized capsule — same idea as Aetherphone's
+    // MaximizedPosition / MinimizedPosition so minimize/restore/reopen land where you left them.
+    public Vector2? MaximizedPosition { get; set; }
+    public Vector2? MinimizedPosition { get; set; }
 
     public Vector3 ScreenPosition { get; set; }
     public float ScreenYaw { get; set; }

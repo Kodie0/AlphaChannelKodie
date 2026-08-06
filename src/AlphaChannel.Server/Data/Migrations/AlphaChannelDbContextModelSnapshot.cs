@@ -28,6 +28,13 @@ namespace AlphaChannel.Server.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AvatarColorHex")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("AvatarIcon")
+                        .HasColumnType("text");
+
                     b.Property<string>("BanReason")
                         .HasColumnType("text");
 
@@ -36,6 +43,9 @@ namespace AlphaChannel.Server.Data.Migrations
 
                     b.Property<DateTime?>("BannedUntilUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Bio")
+                        .HasColumnType("text");
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
@@ -71,6 +81,9 @@ namespace AlphaChannel.Server.Data.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<string>("SelfReportedRaces")
+                        .HasColumnType("text");
+
+                    b.Property<string>("StatusMessage")
                         .HasColumnType("text");
 
                     b.Property<bool>("WantsToSeeLalafellContent")
@@ -135,10 +148,15 @@ namespace AlphaChannel.Server.Data.Migrations
                     b.Property<string>("Metadata")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("TargetAccountId")
+                        .HasColumnType("uuid");
+
                     b.Property<int>("Type")
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("TargetAccountId");
 
                     b.HasIndex("AccountId", "CreatedAtUtc");
 
@@ -211,27 +229,52 @@ namespace AlphaChannel.Server.Data.Migrations
                     b.ToTable("Blocks");
                 });
 
-            modelBuilder.Entity("AlphaChannel.Server.Data.DmConversation", b =>
+            modelBuilder.Entity("AlphaChannel.Server.Data.Conversation", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("AccountAId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AccountBId")
-                        .HasColumnType("uuid");
-
                     b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsGroup")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Conversations");
+                });
+
+            modelBuilder.Entity("AlphaChannel.Server.Data.ConversationMember", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("JoinedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("LastReadAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AccountAId", "AccountBId")
+                    b.HasIndex("AccountId");
+
+                    b.HasIndex("ConversationId", "AccountId")
                         .IsUnique();
 
-                    b.ToTable("DmConversations");
+                    b.ToTable("ConversationMembers");
                 });
 
             modelBuilder.Entity("AlphaChannel.Server.Data.DmMessage", b =>
@@ -251,12 +294,15 @@ namespace AlphaChannel.Server.Data.Migrations
                     b.Property<Guid>("ConversationId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid>("GroupId")
+                        .HasColumnType("uuid");
+
                     b.Property<byte[]>("Nonce")
                         .IsRequired()
                         .HasColumnType("bytea");
 
-                    b.Property<DateTime?>("ReadAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("RecipientAccountId")
+                        .HasColumnType("uuid");
 
                     b.Property<Guid>("SenderAccountId")
                         .HasColumnType("uuid");
@@ -269,6 +315,10 @@ namespace AlphaChannel.Server.Data.Migrations
                         .HasColumnType("bytea");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("GroupId");
+
+                    b.HasIndex("RecipientAccountId");
 
                     b.HasIndex("ConversationId", "SentAtUtc");
 
@@ -331,6 +381,60 @@ namespace AlphaChannel.Server.Data.Migrations
                     b.ToTable("Friendships");
                 });
 
+            modelBuilder.Entity("AlphaChannel.Server.Data.InstalledPlugin", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("InternalName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId", "InternalName")
+                        .IsUnique();
+
+                    b.ToTable("InstalledPlugins");
+                });
+
+            modelBuilder.Entity("AlphaChannel.Server.Data.LiveSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("EndedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId", "EndedAtUtc");
+
+                    b.ToTable("LiveSessions");
+                });
+
             modelBuilder.Entity("AlphaChannel.Server.Data.Post", b =>
                 {
                     b.Property<Guid>("Id")
@@ -347,7 +451,20 @@ namespace AlphaChannel.Server.Data.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("ImageUrl")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("ParentPostId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("RepostOfPostId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("ParentPostId");
+
+                    b.HasIndex("RepostOfPostId");
 
                     b.HasIndex("AuthorAccountId", "CreatedAtUtc");
 
@@ -451,6 +568,76 @@ namespace AlphaChannel.Server.Data.Migrations
                             Id = 1,
                             HideLalafellFromNonLalafell = false
                         });
+                });
+
+            modelBuilder.Entity("AlphaChannel.Server.Data.StreamKey", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("KeyHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("RotatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId")
+                        .IsUnique();
+
+                    b.ToTable("StreamKeys");
+                });
+
+            modelBuilder.Entity("AlphaChannel.Server.Data.Venue", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("OwnerAccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<float>("ScreenScale")
+                        .HasColumnType("real");
+
+                    b.Property<float>("ScreenX")
+                        .HasColumnType("real");
+
+                    b.Property<float>("ScreenY")
+                        .HasColumnType("real");
+
+                    b.Property<float>("ScreenYaw")
+                        .HasColumnType("real");
+
+                    b.Property<float>("ScreenZ")
+                        .HasColumnType("real");
+
+                    b.Property<int>("TerritoryTypeId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnerAccountId");
+
+                    b.HasIndex("TerritoryTypeId");
+
+                    b.ToTable("Venues");
                 });
 #pragma warning restore 612, 618
         }
