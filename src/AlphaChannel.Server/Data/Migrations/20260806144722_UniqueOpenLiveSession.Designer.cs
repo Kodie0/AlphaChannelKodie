@@ -3,6 +3,7 @@ using System;
 using AlphaChannel.Server.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace AlphaChannel.Server.Data.Migrations
 {
     [DbContext(typeof(AlphaChannelDbContext))]
-    partial class AlphaChannelDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260806144722_UniqueOpenLiveSession")]
+    partial class UniqueOpenLiveSession
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

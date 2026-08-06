@@ -12,7 +12,13 @@ hlsAddress: :8888
 # deliberately left unauthenticated (LiveEndpoints' /live/media/auth only ever gates the "publish"
 # action - see its own comment) - same trust model as every other shareable video URL in this app.
 # "alphachannel-server" resolves via the shared docker-compose network, same as Caddy's reverse_proxy target.
+# authMethod must be http — without it MediaMTX keeps internal auth and never calls authHTTPAddress.
+authMethod: http
 authHTTPAddress: http://alphachannel-server:5000/live/media/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
 
 paths:
   all_others:

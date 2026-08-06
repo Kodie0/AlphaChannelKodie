@@ -123,6 +123,11 @@ internal sealed class AlphaChannelDbContext(DbContextOptions<AlphaChannelDbConte
         modelBuilder.Entity<LiveSession>(e =>
         {
             e.HasIndex(s => new { s.AccountId, s.EndedAtUtc });
+            // At most one open session per account — stops concurrent MediaMTX ready webhooks from
+            // inserting duplicate EndedAtUtc=null rows that MarkOfflineAsync would only half-close.
+            e.HasIndex(s => s.AccountId)
+                .IsUnique()
+                .HasFilter("\"EndedAtUtc\" IS NULL");
         });
 
         // Seeds the one settings row via migration data rather than app-startup logic, so it's

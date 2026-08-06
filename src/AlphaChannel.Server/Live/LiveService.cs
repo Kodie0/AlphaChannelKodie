@@ -122,11 +122,22 @@ internal sealed class LiveService(
         var alreadyLive = await db.LiveSessions.AnyAsync(s => s.AccountId == accountId && s.EndedAtUtc == null, cancellationToken);
         if (alreadyLive)
         {
+            liveDirectory.SetLive(accountId.ToString());
             return;
         }
 
         db.LiveSessions.Add(new LiveSession { Id = Guid.NewGuid(), AccountId = accountId, StartedAtUtc = DateTime.UtcNow });
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            // Concurrent /ready webhook already inserted the open session (unique filtered index on
+            // AccountId WHERE EndedAtUtc IS NULL). Warm the cache and skip the duplicate fanout.
+            liveDirectory.SetLive(accountId.ToString());
+            return;
+        }
 
         liveDirectory.SetLive(accountId.ToString());
 
@@ -144,13 +155,21 @@ internal sealed class LiveService(
         }
 
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var session = await db.LiveSessions.FirstOrDefaultAsync(s => s.AccountId == accountId && s.EndedAtUtc == null, cancellationToken);
-        if (session is null)
+        var sessions = await db.LiveSessions
+            .Where(s => s.AccountId == accountId && s.EndedAtUtc == null)
+            .ToListAsync(cancellationToken);
+        if (sessions.Count == 0)
         {
+            liveDirectory.SetOffline(accountId.ToString());
             return;
         }
 
-        session.EndedAtUtc = DateTime.UtcNow;
+        var endedAt = DateTime.UtcNow;
+        foreach (var session in sessions)
+        {
+            session.EndedAtUtc = endedAt;
+        }
+
         await db.SaveChangesAsync(cancellationToken);
 
         liveDirectory.SetOffline(accountId.ToString());
@@ -160,15 +179,25 @@ internal sealed class LiveService(
     // Reuses PresenceService's existing push (the same one connect/disconnect/watch-along already
     // drive) rather than inventing a new signal type - it recomputes PresenceLabels.WatchingLabel
     // (now live-aware via LiveDirectory) and pushes to friends only if the label actually changed.
+    // Live publishers may only have OBS on MediaMTX (no /rt socket) — treat "currently live" as
+    // online so friends still get WatchingLabel = "Live now" instead of Online=false with no label.
     private async Task PushPresenceAsync(Guid accountId, CancellationToken cancellationToken)
     {
         var idString = accountId.ToString();
-        await presence.NotifyAsync(idString, directory.TryGetSocket(idString, out _), cancellationToken);
+        var online = liveDirectory.IsLive(idString) || directory.TryGetSocket(idString, out _);
+        await presence.NotifyAsync(idString, online, cancellationToken);
     }
 
     private string BuildHlsUrl(Guid accountId)
     {
-        var cdnHost = configuration["CDN_HOSTNAME"] ?? configuration["RELAY_DOMAIN"];
+        // docker-compose sets CDN_HOSTNAME="" until a pull zone exists — empty string is not null,
+        // so coalesce with IsNullOrWhiteSpace or friends get https:///live/... m3u8 links.
+        var cdnHost = configuration["CDN_HOSTNAME"];
+        if (string.IsNullOrWhiteSpace(cdnHost))
+        {
+            cdnHost = configuration["RELAY_DOMAIN"];
+        }
+
         return $"https://{cdnHost}/live/{accountId}/index.m3u8";
     }
 

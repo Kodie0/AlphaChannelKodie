@@ -72,6 +72,15 @@ app.UseWebSockets();
 using (var migrationDb = app.Services.GetRequiredService<IDbContextFactory<AlphaChannelDbContext>>().CreateDbContext())
 {
     await migrationDb.Database.MigrateAsync();
+
+    // LiveDirectory is in-memory only — rebuild from open sessions so presence labels stay correct
+    // across server restarts while MediaMTX publishers are still connected.
+    var openLiveIds = await migrationDb.LiveSessions
+        .AsNoTracking()
+        .Where(s => s.EndedAtUtc == null)
+        .Select(s => s.AccountId.ToString())
+        .ToListAsync();
+    app.Services.GetRequiredService<LiveDirectory>().Load(openLiveIds);
 }
 
 app.MapGet("/", () => "AlphaChannel relay is running.");

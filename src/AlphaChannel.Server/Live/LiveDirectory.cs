@@ -17,4 +17,14 @@ internal sealed class LiveDirectory
     public void SetOffline(string accountId) => live.TryRemove(accountId, out _);
 
     public bool IsLive(string accountId) => live.ContainsKey(accountId);
+
+    // Warm the cache from durable LiveSessions rows after a process restart — MediaMTX may still
+    // have publishers connected, and PresenceLabels reads this dictionary, not the DB.
+    public void Load(IEnumerable<string> accountIds)
+    {
+        foreach (var accountId in accountIds)
+        {
+            live[accountId] = true;
+        }
+    }
 }
