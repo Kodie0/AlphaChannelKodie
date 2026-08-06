@@ -1,5 +1,7 @@
+using AlphaChannel.Plugin.Auth;
 using AlphaChannel.Plugin.Video;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.Command;
 using Dalamud.Game.Gui.ContextMenu;
 using Dalamud.Game.Gui.NamePlate;
@@ -33,6 +35,15 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AetherStreamQueue queue;
     private readonly StreamClient stream;
     private readonly MainWindow mainWindow;
+    private readonly AuthClient authClient;
+    private readonly SignInFlow signInFlow;
+    private readonly FriendsClient friendsClient;
+    private readonly ActivityClient activityClient;
+    private readonly DmClient dmClient;
+    private readonly ReportClient reportClient;
+    private readonly TweeterClient tweeterClient;
+    private readonly KeysClient keysClient;
+    private readonly AlphaChannel.Plugin.Crypto.KeyVault keyVault;
 
     // Written from the network thread (OnRemoteState), read/cleared on the main thread
     // (OnFrameworkUpdate) - a plain reference field is fine here, a single pointer swap is already
@@ -77,12 +88,24 @@ public sealed class Plugin : IDalamudPlugin
         video.CookiesPath = Cfg.YouTubeCookiesPath;
         video.UseFirefoxCookies = Cfg.UseFirefoxCookies;
         queue = new AetherStreamQueue(video);
-        stream = new StreamClient(Cfg, () => Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId()));
+        stream = new StreamClient(Cfg, () => Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId()),
+            () => Cfg.CharacterSessions.GetValueOrDefault(ReadLocalContentId()));
         stream.OnState += OnRemoteState;
         stream.OnRenameRequired += OnRenameRequired;
         stream.Start();
 
-        mainWindow = new MainWindow(screenController, video, queue, stream, RequestRename);
+        authClient = new AuthClient(Cfg);
+        signInFlow = new SignInFlow(authClient);
+        friendsClient = new FriendsClient(Cfg);
+        activityClient = new ActivityClient(Cfg);
+        dmClient = new DmClient(Cfg);
+        reportClient = new ReportClient(Cfg);
+        tweeterClient = new TweeterClient(Cfg);
+        keysClient = new KeysClient(Cfg);
+        keyVault = new AlphaChannel.Plugin.Crypto.KeyVault(Cfg, keysClient);
+
+        mainWindow = new MainWindow(screenController, video, queue, stream, RequestRename, authClient, signInFlow,
+            friendsClient, activityClient, dmClient, reportClient, tweeterClient, keyVault, UpdateSessionForCurrentCharacter);
         windowSystem.AddWindow(mainWindow);
 
         Framework.Update += OnFrameworkUpdate;
@@ -130,6 +153,10 @@ public sealed class Plugin : IDalamudPlugin
         queue.OnFrameworkUpdate();
         EnsureCharacterHasName();
         mainWindow.CurrentDisplayName = Cfg.CharacterDisplayNames.GetValueOrDefault(ReadLocalContentId());
+        mainWindow.CurrentSession = Cfg.CharacterSessions.GetValueOrDefault(ReadLocalContentId());
+        mainWindow.CurrentCharacterName = ObjectTable.LocalPlayer?.Name.TextValue;
+        mainWindow.CurrentWorldName = ReadLocalWorldName();
+        mainWindow.CurrentIsLalafell = ReadIsLalafell();
 
         if (pendingRemoteState is { } remoteState)
         {
@@ -322,6 +349,50 @@ public sealed class Plugin : IDalamudPlugin
     {
         var state = PlayerState.Instance();
         return state is null ? 0 : state->ContentId;
+    }
+
+    private static string? ReadLocalWorldName() => ObjectTable.LocalPlayer?.HomeWorld.Value.Name.ToString();
+
+    // Race 3 = Lalafell, per the same customize-byte-array lookup Aetherphone's Velvet feature
+    // already uses (Apps/Velvet/VelvetShell.cs's IsLalafellCharacter) for its own Lalafell-specific
+    // access gating - kept as a private const here rather than an enum since this is the only place
+    // AlphaChannel needs it.
+    private const byte LalafellRaceId = 3;
+
+    private static bool ReadIsLalafell()
+    {
+        var local = ObjectTable.LocalPlayer;
+        if (local is null)
+        {
+            return false;
+        }
+
+        var customize = local.Customize;
+        var raceIndex = (int)CustomizeIndex.Race;
+        return customize.Length > raceIndex && customize[raceIndex] == LalafellRaceId;
+    }
+
+    // Writes (or, for sign-out, removes) the CharacterSession for whichever character is currently
+    // being played - the one piece of persistence MainWindow's sign-in UI isn't allowed to do
+    // itself, same split as PromptForName above.
+    private void UpdateSessionForCurrentCharacter(CharacterSession? session)
+    {
+        var contentId = ReadLocalContentId();
+        if (contentId == 0)
+        {
+            return;
+        }
+
+        if (session is null)
+        {
+            Cfg.CharacterSessions.Remove(contentId);
+        }
+        else
+        {
+            Cfg.CharacterSessions[contentId] = session;
+        }
+
+        Cfg.Save();
     }
 
     public void Dispose()

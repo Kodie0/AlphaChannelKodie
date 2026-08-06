@@ -1,3 +1,4 @@
+using AlphaChannel.Plugin.Auth;
 using Dalamud.Configuration;
 using Dalamud.Plugin;
 
@@ -32,11 +33,20 @@ internal sealed class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
 
-    // Self-asserted identity sent as the relay's bearer token - see the auth note in the plan this
-    // was built from. Generated once on first run and persisted; there is no real account system
-    // behind it, the relay just trusts whatever UserId shows up.
-    public string UserId { get; set; } = Guid.NewGuid().ToString("N");
     public string RelayServerUrl { get; set; } = "https://alphachannel.duckdns.org";
+
+    // Keyed by IClientState.LocalContentId, same idiom as CharacterDisplayNames below - a
+    // character's sign-in is tied to the FFXIV character, not the plugin install. Two entries can
+    // point at the same AccountId once linked (see Auth/AuthClient.cs). Only Watch-along, Friends,
+    // Messages, and Activity require an entry here for the current character; Player/Screen/
+    // Settings keep working with none, same zero-friction default as before accounts existed.
+    public Dictionary<ulong, CharacterSession> CharacterSessions { get; set; } = new();
+
+    // Keyed by AccountId (not LocalContentId) - DM identity belongs to the account, not whichever
+    // character happens to be signed in as it. Base64 PKCS8 private key, DPAPI-protected on Windows
+    // where available (see Crypto/KeyVault.cs) - the key never leaves this machine either way, this
+    // is defense-in-depth against other local processes, not network protection.
+    public Dictionary<string, string> DmPrivateKeys { get; set; } = new();
 
     public int Volume { get; set; } = 100;
     public bool Muted { get; set; }

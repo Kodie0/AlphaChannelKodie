@@ -1,0 +1,29 @@
+namespace AlphaChannel.Server.Social;
+
+// Shared by FriendService (pull, GET /friends) and PresenceService (push, on connect/disconnect)
+// so "what is this account doing right now" is computed exactly one way. Nothing here is stored -
+// it's a live query over RoomManager/UserDirectory, the same in-memory state stream.* already uses.
+internal static class PresenceLabels
+{
+    public static string? WatchingLabel(string accountId, RoomManager rooms, UserDirectory directory)
+    {
+        if (rooms.FindRoomHostedBy(accountId) is { } hostedRoom)
+        {
+            if (hostedRoom.IsPrivate)
+            {
+                return "Watching privately";
+            }
+
+            var count = hostedRoom.Viewers.Count;
+            return count == 0 ? "Hosting a watch-along" : $"Hosting a watch-along ({count} watching)";
+        }
+
+        if (rooms.FindRoomViewedBy(accountId) is { } viewedRoom)
+        {
+            // A viewer in someone else's private room shouldn't leak who's hosting either.
+            return viewedRoom.IsPrivate ? "Watching privately" : $"Watching with {directory.DisplayNameOrFallback(viewedRoom.HostUserId)}";
+        }
+
+        return null;
+    }
+}

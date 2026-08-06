@@ -69,6 +69,12 @@
           "SixLabors.ImageSharp": "3.1.11"
         }
       },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "Direct",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "BKt0SQgq2lq3ESE68jkeLwv95ypANrPDtkTOIFGcnhg2aRUeUUBDrQlkVDZctrg1WenVcvn5P5XZnuYI7q6rFQ=="
+      },
       "YoutubeExplode": {
         "type": "Direct",
         "requested": "[6.6.0, )",

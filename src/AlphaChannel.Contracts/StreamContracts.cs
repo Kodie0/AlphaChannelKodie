@@ -55,6 +55,13 @@ public sealed record StreamControl
     public double? PositionSeconds { get; init; }
     public bool? Paused { get; init; }
 
+    // Host-set, carried on stream.state and persisted on the Room server-side until changed again
+    // (an omitted/null value does NOT reset it to false - see ConnectionHandler's handling). When
+    // true, PresenceLabels hides what/who this room's participants are watching from friends -
+    // still shows a neutral "watching privately" rather than nothing, so presence doesn't look like
+    // they've gone offline.
+    public bool? IsPrivate { get; init; }
+
     // The host's world-anchored screen transform (VideoEngine.ScreenPosition/ScreenYaw/ScreenScale).
     // Omitted entirely if the host's screen isn't active. Every viewer's client applies this to its
     // own local ScreenPainter - there is no shared/networked 3D object.

@@ -1,6 +1,8 @@
 using System.Net.WebSockets;
 using System.Text.Json;
 using AlphaChannel.Contracts;
+using AlphaChannel.Server.Data;
+using AlphaChannel.Server.Social;
 
 namespace AlphaChannel.Server;
 
@@ -9,12 +11,14 @@ namespace AlphaChannel.Server;
 // userId here is just whatever the client's Authorization: Bearer header claims, no verification
 // against a real identity. Room ownership itself (who's currently hosting) is NOT tracked in a
 // local anymore - see the finally block's comment for why a stream.transferHost made that unsafe.
-internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directory, ILogger<ConnectionHandler> logger)
+internal sealed class ConnectionHandler(
+    RoomManager rooms, UserDirectory directory, PresenceService presence, ActivityService activity, ILogger<ConnectionHandler> logger)
 {
     public async Task RunAsync(WebSocket socket, string userId, CancellationToken token)
     {
         string? viewingHostId = null;
         directory.Connected(userId, socket);
+        await presence.NotifyAsync(userId, online: true, token).ConfigureAwait(false);
 
         try
         {
@@ -60,9 +64,20 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                     case SignalType.StreamState:
                         // FindRoomHostedBy first: if this user was transferred host of an existing
                         // room, their state updates THAT room, not a brand new one keyed by them.
+                        var isNewRoom = rooms.FindRoomHostedBy(userId) is null;
                         var room = rooms.FindRoomHostedBy(userId) ?? rooms.GetOrCreateRoom(userId);
+                        room.IsPrivate = message.IsPrivate ?? room.IsPrivate;
                         room.LastState = message with { HostId = room.HostUserId };
                         await BroadcastAsync(room, room.LastState, token).ConfigureAwait(false);
+                        // Safe to call every tick despite StreamState's own every-tick cadence -
+                        // PresenceService dedups against the last label it actually pushed.
+                        await presence.NotifyAsync(userId, online: true, token).ConfigureAwait(false);
+
+                        if (isNewRoom && !room.IsPrivate)
+                        {
+                            await activity.RecordAsync(Guid.Parse(userId), ActivityEventType.StartedWatching, null, token).ConfigureAwait(false);
+                        }
+
                         break;
 
                     // message.HostId carries the host's typed display name here, not their real
@@ -86,6 +101,14 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                         }
 
                         await BroadcastRosterAsync(target, token).ConfigureAwait(false);
+                        await presence.NotifyAsync(userId, online: true, token).ConfigureAwait(false);
+
+                        if (!target.IsPrivate)
+                        {
+                            await activity.RecordAsync(Guid.Parse(userId), ActivityEventType.JoinedWatchAlong,
+                                directory.DisplayNameOrFallback(target.HostUserId), token).ConfigureAwait(false);
+                        }
+
                         break;
 
                     case SignalType.StreamLeave:
@@ -94,6 +117,7 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                             leaveRoom.Viewers.TryRemove(userId, out _);
                             viewingHostId = null;
                             await BroadcastRosterAsync(leaveRoom, token).ConfigureAwait(false);
+                            await presence.NotifyAsync(userId, online: true, token).ConfigureAwait(false);
                         }
 
                         break;
@@ -121,6 +145,8 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                         await BroadcastAsync(ownedRoom, transferred, token).ConfigureAwait(false);
                         await SendAsync(socket, transferred, token).ConfigureAwait(false);
                         await BroadcastRosterAsync(ownedRoom, token).ConfigureAwait(false);
+                        await presence.NotifyAsync(userId, online: true, token).ConfigureAwait(false);
+                        await presence.NotifyAsync(newHostId, online: true, token).ConfigureAwait(false);
                         break;
 
                     case SignalType.StreamReaction when message.Reaction is { Length: > 0 }:
@@ -172,6 +198,10 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
                 viewedRoom.Viewers.TryRemove(userId, out _);
                 await BroadcastRosterAsync(viewedRoom, CancellationToken.None).ConfigureAwait(false);
             }
+
+            // Room state above is already torn down/updated, so this correctly computes "offline"
+            // (PresenceLabels won't find this userId hosting or viewing anything anymore).
+            await presence.NotifyAsync(userId, online: false, CancellationToken.None).ConfigureAwait(false);
         }
     }
 
@@ -204,20 +234,6 @@ internal sealed class ConnectionHandler(RoomManager rooms, UserDirectory directo
         }
     }
 
-    private static async Task SendAsync(WebSocket socket, StreamControl message, CancellationToken token)
-    {
-        if (socket.State != WebSocketState.Open)
-        {
-            return;
-        }
-
-        var json = JsonSerializer.SerializeToUtf8Bytes(message);
-        try
-        {
-            await socket.SendAsync(json, WebSocketMessageType.Text, true, token).ConfigureAwait(false);
-        }
-        catch (WebSocketException)
-        {
-        }
-    }
+    private static Task SendAsync(WebSocket socket, StreamControl message, CancellationToken token) =>
+        SocketSend.SendAsync(socket, message, token);
 }

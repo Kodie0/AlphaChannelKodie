@@ -14,6 +14,9 @@ internal sealed class Room
     public required string HostUserId { get; set; }
     public StreamControl? LastState { get; set; }
     public ConcurrentDictionary<string, WebSocket> Viewers { get; } = new();
+
+    // Set from StreamControl.IsPrivate on stream.state - see that field's doc comment.
+    public bool IsPrivate { get; set; }
 }
 
 internal sealed class RoomManager
@@ -31,6 +34,11 @@ internal sealed class RoomManager
     // fine at this scale, same reasoning as UserDirectory.TryResolveUserId's own scan.
     public Room? FindRoomHostedBy(string userId) =>
         rooms.Values.FirstOrDefault(room => room.HostUserId == userId);
+
+    // Same O(n)-is-fine reasoning as FindRoomHostedBy - used by presence to say "watching with
+    // {host}" for a viewer, as opposed to FindRoomHostedBy's "hosting" case.
+    public Room? FindRoomViewedBy(string userId) =>
+        rooms.Values.FirstOrDefault(room => room.Viewers.ContainsKey(userId));
 
     public void RemoveRoom(string roomKey) => rooms.TryRemove(roomKey, out _);
 }

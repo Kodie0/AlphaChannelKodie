@@ -24,8 +24,6 @@ internal sealed partial class MainWindow
         new(0.40f, 0.85f, 0.65f, 1f),
     ];
 
-    private static string? cachedVersionText;
-
     private void DrawHome()
     {
         DrawWelcomeHeader();
@@ -41,9 +39,6 @@ internal sealed partial class MainWindow
         ImGui.Spacing();
         ImGui.Spacing();
         DrawWatchTogetherCta();
-        ImGui.Spacing();
-        ImGui.Spacing();
-        DrawVersionFooter();
     }
 
     private void DrawWelcomeHeader()
@@ -357,20 +352,6 @@ internal sealed partial class MainWindow
         {
             currentPage = HomePage.Player;
         }
-    }
-
-    private void DrawVersionFooter()
-    {
-        cachedVersionText ??= typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "dev";
-        var text = $"AlphaChannel v{cachedVersionText}";
-        var textWidth = ImGui.CalcTextSize(text).X;
-        var avail = ImGui.GetContentRegionAvail().X;
-        if (avail > textWidth)
-        {
-            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (avail - textWidth) / 2f);
-        }
-
-        ImGui.TextColored(MutedText, text);
     }
 
     // Shared by the Home quick-join box and the dedicated Watch-along page's join field - keeps

@@ -3,15 +3,15 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using AlphaChannel.Contracts;
+using AlphaChannel.Plugin.Auth;
 
 namespace AlphaChannel.Plugin;
 
 // Rewrite, not a port, of Aetherphone's WatchAlongSession networking half - that one is built
 // directly on AethernetSession/CallHub (account auth, a websocket shared with phone calls). This
 // talks to AlphaChannel.Server's dedicated /rt endpoint instead, with the same stream.* message
-// shape (see AlphaChannel.Contracts) but none of Aethernet's account/relationship machinery -
-// the relay auto-accepts joins for v1 (see the plan's auth note: UserId is self-asserted, not a
-// verified identity).
+// shape (see AlphaChannel.Contracts). Auth is now a real XIVAuth-backed account (see Auth/) - the
+// bearer token comes from the current character's CharacterSession, not a self-asserted UserId.
 internal enum StreamMode
 {
     None,
@@ -25,10 +25,17 @@ internal sealed class StreamClient : IDisposable
 
     private readonly Configuration configuration;
     private readonly Func<string?> displayNameProvider;
+    private readonly Func<CharacterSession?> sessionProvider;
     private readonly CancellationTokenSource lifetime = new();
     private readonly SemaphoreSlim sendLock = new(1, 1);
     private ClientWebSocket? socket;
     private Task? runTask;
+
+    // Snapshot of sessionProvider().AccountId taken at the moment a connection is established -
+    // used for the rest of that connection's lifetime so a mid-session character switch can't
+    // desync self-identity checks (e.g. the host-transfer comparison in Dispatch) from what the
+    // server actually authenticated this socket as.
+    private string? myAccountId;
 
     internal StreamMode Mode { get; private set; } = StreamMode.None;
     internal string? HostId { get; private set; }
@@ -49,10 +56,22 @@ internal sealed class StreamClient : IDisposable
     // one again, same as the first-connect flow.
     internal event Action? OnRenameRequired;
 
-    internal StreamClient(Configuration configuration, Func<string?> displayNameProvider)
+    // friend.*/presence.*/dm.*/activity.* pushes - see AlphaChannel.Contracts.SocialControl. These
+    // are push-only (the server never expects a SocialControl back), so unlike the stream.* events
+    // above there's no corresponding SendXAsync method for most of them - mutations go over REST
+    // (Social/DmService/etc. clients, added alongside the features that use them).
+    internal event Action<SocialControl>? OnFriendRequestReceived;
+    internal event Action<SocialControl>? OnFriendAccepted;
+    internal event Action<SocialControl>? OnFriendRemoved;
+    internal event Action<SocialControl>? OnPresenceUpdate;
+    internal event Action<SocialControl>? OnDmMessage;
+    internal event Action<SocialControl>? OnActivityNew;
+
+    internal StreamClient(Configuration configuration, Func<string?> displayNameProvider, Func<CharacterSession?> sessionProvider)
     {
         this.configuration = configuration;
         this.displayNameProvider = displayNameProvider;
+        this.sessionProvider = sessionProvider;
     }
 
     internal void Start()
@@ -64,12 +83,22 @@ internal sealed class StreamClient : IDisposable
     {
         while (!token.IsCancellationRequested)
         {
+            var session = sessionProvider();
+            if (session is null)
+            {
+                // No signed-in account for the current character - nothing to connect with.
+                // Player/Screen/Settings don't need this, so we just idle rather than error.
+                await Task.Delay(ReconnectDelay, token).ConfigureAwait(false);
+                continue;
+            }
+
             try
             {
                 using var ws = new ClientWebSocket();
-                ws.Options.SetRequestHeader("Authorization", $"Bearer {configuration.UserId}");
+                ws.Options.SetRequestHeader("Authorization", $"Bearer {session.Token}");
                 await ws.ConnectAsync(BuildUri(configuration.RelayServerUrl), token).ConfigureAwait(false);
                 socket = ws;
+                myAccountId = session.AccountId;
                 AepLog.Info("[Stream] connected");
                 if (displayNameProvider() is { Length: > 0 } name)
                 {
@@ -117,11 +146,12 @@ internal sealed class StreamClient : IDisposable
                 stream.Write(buffer, 0, result.Count);
             } while (!result.EndOfMessage);
 
-            stream.Position = 0;
-            StreamControl? message;
+            var bytes = stream.ToArray();
+            string? type;
             try
             {
-                message = JsonSerializer.Deserialize<StreamControl>(stream);
+                using var peek = JsonDocument.Parse(bytes);
+                type = peek.RootElement.TryGetProperty("Type", out var typeEl) ? typeEl.GetString() : null;
             }
             catch (JsonException exception)
             {
@@ -129,9 +159,30 @@ internal sealed class StreamClient : IDisposable
                 continue;
             }
 
-            if (message is not null)
+            // friend./presence./dm./activity. share the socket with stream. but are a distinct
+            // envelope shape (SocialControl, not StreamControl) - see AlphaChannel.Contracts.
+            var isSocial = type is not null && (type.StartsWith("friend.", StringComparison.Ordinal) ||
+                type.StartsWith("presence.", StringComparison.Ordinal) ||
+                type.StartsWith("dm.", StringComparison.Ordinal) ||
+                type.StartsWith("activity.", StringComparison.Ordinal));
+
+            try
             {
-                Dispatch(message);
+                if (isSocial)
+                {
+                    if (JsonSerializer.Deserialize<SocialControl>(bytes) is { } social)
+                    {
+                        DispatchSocial(social);
+                    }
+                }
+                else if (JsonSerializer.Deserialize<StreamControl>(bytes) is { } message)
+                {
+                    Dispatch(message);
+                }
+            }
+            catch (JsonException exception)
+            {
+                AepLog.Warning($"[Stream] malformed message: {exception.Message}");
             }
         }
     }
@@ -172,7 +223,7 @@ internal sealed class StreamClient : IDisposable
                 break;
 
             case SignalType.StreamHostTransferred:
-                if (message.HostId == configuration.UserId)
+                if (message.HostId == myAccountId)
                 {
                     Mode = StreamMode.Hosting;
                     HostId = null;
@@ -192,8 +243,35 @@ internal sealed class StreamClient : IDisposable
         }
     }
 
+    private void DispatchSocial(SocialControl message)
+    {
+        switch (message.Type)
+        {
+            case SocialSignalType.FriendRequestReceived:
+                OnFriendRequestReceived?.Invoke(message);
+                break;
+            case SocialSignalType.FriendAccepted:
+                OnFriendAccepted?.Invoke(message);
+                break;
+            case SocialSignalType.FriendRemoved:
+                OnFriendRemoved?.Invoke(message);
+                break;
+            case SocialSignalType.PresenceUpdate:
+                OnPresenceUpdate?.Invoke(message);
+                break;
+            case SocialSignalType.DmMessage:
+                OnDmMessage?.Invoke(message);
+                break;
+            case SocialSignalType.ActivityNew:
+                OnActivityNew?.Invoke(message);
+                break;
+        }
+    }
+
     internal Task SendHelloAsync(string displayName) =>
         SendAsync(new StreamControl { Type = SignalType.StreamHello, DisplayName = displayName });
+
+    internal bool IsPrivate { get; set; }
 
     internal Task PublishStateAsync(string url, double positionSeconds, bool paused, Vector3? screenPosition,
         float? screenYaw, float? screenScale)
@@ -202,7 +280,7 @@ internal sealed class StreamClient : IDisposable
         return SendAsync(new StreamControl
         {
             Type = SignalType.StreamState,
-            HostId = configuration.UserId,
+            HostId = myAccountId,
             Url = url,
             PositionSeconds = positionSeconds,
             Paused = paused,
@@ -211,6 +289,7 @@ internal sealed class StreamClient : IDisposable
             ScreenZ = screenPosition?.Z,
             ScreenYaw = screenYaw,
             ScreenScale = screenScale,
+            IsPrivate = IsPrivate,
         });
     }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AlphaChannel.Plugin.Auth;
 using AlphaChannel.Plugin.Video;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -35,6 +36,10 @@ internal sealed partial class MainWindow : Window, IDisposable
         Player,
         Screen,
         WatchAlong,
+        Friends,
+        Messages,
+        Activity,
+        Tweeter,
         Settings,
     }
 
@@ -44,6 +49,20 @@ internal sealed partial class MainWindow : Window, IDisposable
     private readonly StreamClient stream;
     private readonly ThumbnailCache thumbnails = new();
     private readonly Action requestRename;
+    private readonly SignInFlow signInFlow;
+    private readonly AuthClient authClient;
+    private readonly FriendsClient friendsClient;
+    private readonly ActivityClient activityClient;
+    private readonly DmClient dmClient;
+    private readonly ReportClient reportClient;
+    private readonly TweeterClient tweeterClient;
+    private readonly Crypto.KeyVault keyVault;
+
+    // Called whenever sign-in/link/sign-out changes what CharacterSession belongs to the currently-
+    // played character - the callback (Plugin.cs) is what actually writes Cfg.CharacterSessions and
+    // saves, same split as requestRename above (MainWindow owns the UI, Plugin.cs owns persistence).
+    private readonly Action<CharacterSession?> onSessionChanged;
+
     private HomePage currentPage = HomePage.Home;
     private string joinHostNameInput = string.Empty;
     private string? joinError;
@@ -64,14 +83,42 @@ internal sealed partial class MainWindow : Window, IDisposable
     // raw UserId so players never need to read each other an opaque GUID to join a stream.
     internal string? CurrentDisplayName { get; set; }
 
+    // Also updated every tick from Plugin.cs, same reasoning as CurrentDisplayName - the signed-in
+    // account (if any) for whichever character is currently being played, and the live character
+    // name/world to sign in with if there isn't one yet.
+    internal CharacterSession? CurrentSession { get; set; }
+    internal string? CurrentCharacterName { get; set; }
+    internal string? CurrentWorldName { get; set; }
+    internal bool CurrentIsLalafell { get; set; }
+
     internal MainWindow(ScreenController screenController, VideoPlayer video, AetherStreamQueue queue,
-        StreamClient stream, Action requestRename) : base("AlphaChannel###AlphaChannelMain")
+        StreamClient stream, Action requestRename, AuthClient authClient, SignInFlow signInFlow,
+        FriendsClient friendsClient, ActivityClient activityClient, DmClient dmClient, ReportClient reportClient,
+        TweeterClient tweeterClient, Crypto.KeyVault keyVault, Action<CharacterSession?> onSessionChanged)
+        : base("AlphaChannel###AlphaChannelMain")
     {
         this.screenController = screenController;
         this.video = video;
         this.queue = queue;
         this.stream = stream;
         this.requestRename = requestRename;
+        this.authClient = authClient;
+        this.signInFlow = signInFlow;
+        this.friendsClient = friendsClient;
+        this.activityClient = activityClient;
+        this.dmClient = dmClient;
+        this.reportClient = reportClient;
+        this.tweeterClient = tweeterClient;
+        this.keyVault = keyVault;
+        this.onSessionChanged = onSessionChanged;
+
+        stream.OnFriendRequestReceived += _ => friendsDirty = true;
+        stream.OnFriendAccepted += _ => friendsDirty = true;
+        stream.OnFriendRemoved += _ => friendsDirty = true;
+        stream.OnPresenceUpdate += ApplyPresenceUpdate;
+        stream.OnActivityNew += _ => activityDirty = true;
+        stream.OnDmMessage += ApplyIncomingDm;
+
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(720, 480),
@@ -104,6 +151,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         using var theme = new ThemeScope();
 
         DrawNamePrompt();
+        DrawSignInModal();
         DrawGlowBorder();
 
         // ChildBg/WindowPadding are captured by ImGui at the moment BeginChild runs, so these have
@@ -165,6 +213,22 @@ internal sealed partial class MainWindow : Window, IDisposable
                 ImGui.Spacing();
                 DrawReactions();
                 break;
+            case HomePage.Friends:
+                PageTitle("Friends Channel");
+                DrawFriends();
+                break;
+            case HomePage.Messages:
+                PageTitle("Alpha Chat");
+                DrawMessages();
+                break;
+            case HomePage.Activity:
+                PageTitle("Activity Channel");
+                DrawActivity();
+                break;
+            case HomePage.Tweeter:
+                PageTitle("Tweeter Channel");
+                DrawTweeter();
+                break;
             case HomePage.Settings:
                 PageTitle("Settings");
                 DrawSettings();
@@ -214,12 +278,16 @@ internal sealed partial class MainWindow : Window, IDisposable
         DrawNavItem(HomePage.Player, FontAwesomeIcon.Play, "Player");
         DrawNavItem(HomePage.Screen, FontAwesomeIcon.Desktop, "Screen");
         DrawNavItem(HomePage.WatchAlong, FontAwesomeIcon.Users, "Watch-along");
+        DrawNavItem(HomePage.Friends, FontAwesomeIcon.UserFriends, "Friends");
+        DrawNavItem(HomePage.Messages, FontAwesomeIcon.Comment, "Alpha Chat");
+        DrawNavItem(HomePage.Activity, FontAwesomeIcon.Bell, "Activity");
+        DrawNavItem(HomePage.Tweeter, FontAwesomeIcon.Feather, "Tweeter");
         DrawNavItem(HomePage.Settings, FontAwesomeIcon.Cog, "Settings");
 
         // Pinned near the bottom rather than wherever nav happens to end - the watching-count
         // card and the Ko-fi link are meant to always be visible, not scroll away with more nav
         // items later.
-        var bottomBlockHeight = 96f;
+        var bottomBlockHeight = 116f;
         var targetY = ImGui.GetWindowHeight() - bottomBlockHeight;
         if (targetY > ImGui.GetCursorPosY())
         {
@@ -231,6 +299,8 @@ internal sealed partial class MainWindow : Window, IDisposable
         DrawWatchingStat();
         ImGui.Spacing();
         DrawDonateLink();
+        ImGui.Spacing();
+        DrawVersionFooter();
     }
 
     // InvisibleButton, not Selectable+PushColor(Header) - the same proven click-region technique
@@ -307,6 +377,14 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    private static string? cachedVersionText;
+
+    private static void DrawVersionFooter()
+    {
+        cachedVersionText ??= typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "dev";
+        ImGui.TextColored(MutedText, $"AlphaChannel v{cachedVersionText}");
+    }
+
     // Every non-Home page starts with one of these instead of the old tab label - the sidebar nav
     // no longer shows a title once a page is selected, so the content area needs its own. Scaled
     // via SetWindowFontScale rather than a second font asset - Dalamud only guarantees the one
@@ -358,10 +436,27 @@ internal sealed partial class MainWindow : Window, IDisposable
 
     private void DrawWatchAlong()
     {
+        if (CurrentSession is null)
+        {
+            ImGui.TextColored(MutedText, "Sign in to host or join a watch-along.");
+            if (ImGui.Button("Go to Settings"))
+            {
+                currentPage = HomePage.Settings;
+            }
+
+            return;
+        }
+
         switch (stream.Mode)
         {
             case StreamMode.Hosting:
                 SectionHeader("You're hosting");
+                var isPrivate = stream.IsPrivate;
+                if (ImGui.Checkbox("Private (hide from friends' presence)", ref isPrivate))
+                {
+                    stream.IsPrivate = isPrivate;
+                }
+
                 if (ImGui.Button("Copy party invite"))
                 {
                     ImGui.SetClipboardText(

@@ -1,4 +1,19 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   alphachannel-server:
     build:
       context: .
@@ -8,6 +23,16 @@ services:
       - "5000"
     environment:
       - ADMIN_TOKEN=${ADMIN_TOKEN}
+      - ConnectionStrings__AlphaChannel=Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      - XIVAUTH_CLIENT_ID=${XIVAUTH_CLIENT_ID}
+      - XIVAUTH_CLIENT_SECRET=${XIVAUTH_CLIENT_SECRET}
+      - XIVAUTH_DEVICE_ENDPOINT=${XIVAUTH_DEVICE_ENDPOINT}
+      - XIVAUTH_TOKEN_ENDPOINT=${XIVAUTH_TOKEN_ENDPOINT}
+      - XIVAUTH_CHARACTERS_ENDPOINT=${XIVAUTH_CHARACTERS_ENDPOINT}
+      - DISCORD_LALAFELL_WEBHOOK_URL=${DISCORD_LALAFELL_WEBHOOK_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   caddy:
     image: caddy:2-alpine
@@ -27,3 +52,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  postgres_data:
