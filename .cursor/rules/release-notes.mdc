@@ -1,0 +1,15 @@
+---
+description: GitHub release "What's new" must be detailed changelogs, not short bullet stubs
+alwaysApply: true
+---
+
+# Release notes depth
+
+When cutting or editing a GitHub release (`gh release create` / `gh release edit`) for AlphaChannel:
+
+- Write a **detailed** What's new — not a handful of vague one-liners.
+- Structure with a short Summary, then sectioned detail (UX, Player, Settings, Server, Fixes, Parked/deferred, Install).
+- Cover **what changed and why it matters** for hosts/viewers: behavior, commands, Settings surfaces added/removed, breaking gotchas, parked features and the reason they were parked.
+- Prefer concrete names (pages, commands, config keys, file paths) over marketing blurbs.
+- Call out anything that still needs AlphaChannel vs Penumbra/Lightless so expectations stay clear.
+- If updating an already-published release's notes, rewrite the full body — don't leave the short stub.
