@@ -57,6 +57,82 @@ internal static class AuthEndpoints
             };
         }).AddEndpointFilter<AccountAuthFilter>();
 
+        // Custom profile picture — multipart field "file", max 1 MB, png/jpg/webp. Replaces any
+        // previous upload for this account. Icon/color chips remain the fallback while clients load.
+        app.MapPost("/me/avatar", async (HttpContext context, AccountService accounts, AvatarStorage storage, CancellationToken ct) =>
+        {
+            var account = context.GetAccount();
+            if (!context.Request.HasFormContentType)
+            {
+                return Results.BadRequest(new { reason = "expected_multipart" });
+            }
+
+            var form = await context.Request.ReadFormAsync(ct);
+            var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+            if (file is null || file.Length == 0)
+            {
+                return Results.BadRequest(new { reason = "missing_file" });
+            }
+
+            if (file.Length > AvatarStorage.MaxBytes)
+            {
+                return Results.Json(new { reason = "too_large", maxBytes = AvatarStorage.MaxBytes },
+                    statusCode: StatusCodes.Status413PayloadTooLarge);
+            }
+
+            await using var upload = file.OpenReadStream();
+            using var buffer = new MemoryStream();
+            await upload.CopyToAsync(buffer, ct);
+            if (buffer.Length > AvatarStorage.MaxBytes)
+            {
+                return Results.Json(new { reason = "too_large", maxBytes = AvatarStorage.MaxBytes },
+                    statusCode: StatusCodes.Status413PayloadTooLarge);
+            }
+
+            var bytes = buffer.ToArray();
+            var extension = AvatarStorage.DetectExtension(bytes.AsSpan(0, Math.Min(16, bytes.Length)), file.FileName);
+            if (extension is null)
+            {
+                return Results.Json(new { reason = "unsupported_type" }, statusCode: StatusCodes.Status415UnsupportedMediaType);
+            }
+
+            var fileName = storage.BuildFileName(account.Id, extension);
+            foreach (var staleExt in new[] { ".png", ".jpg", ".jpeg", ".webp" })
+            {
+                storage.DeleteIfExists(storage.BuildFileName(account.Id, staleExt));
+            }
+
+            await File.WriteAllBytesAsync(storage.GetFullPath(fileName), bytes, ct);
+
+            var outcome = await accounts.SetAvatarImageAsync(account.Id, fileName, ct);
+            return outcome.Result == UpdateProfileResult.Updated
+                ? Results.Ok(outcome.Account)
+                : Results.NotFound();
+        }).AddEndpointFilter<AccountAuthFilter>().DisableAntiforgery();
+
+        app.MapDelete("/me/avatar", async (HttpContext context, AccountService accounts, AvatarStorage storage, CancellationToken ct) =>
+        {
+            var outcome = await accounts.ClearAvatarImageAsync(context.GetAccount().Id, storage, ct);
+            return outcome.Result == UpdateProfileResult.Updated
+                ? Results.Ok(outcome.Account)
+                : Results.NotFound();
+        }).AddEndpointFilter<AccountAuthFilter>();
+
+        // Public read — friends lists and profile popups need this without an extra auth hop.
+        // Filenames are account-scoped GUIDs, so guessing others' avatars is impractical at scale.
+        app.MapGet("/avatars/{fileName}", (string fileName, AvatarStorage storage) =>
+        {
+            if (!AvatarStorage.IsSafeFileName(fileName))
+            {
+                return Results.NotFound();
+            }
+
+            var path = storage.GetFullPath(fileName);
+            return File.Exists(path)
+                ? Results.File(path, AvatarStorage.ContentTypeFor(fileName), enableRangeProcessing: false)
+                : Results.NotFound();
+        });
+
         // The one endpoint anywhere that returns a real character name/world - and only ever the
         // caller's own linked characters (see LinkedCharacterDto's doc comment).
         app.MapGet("/me/characters", async (HttpContext context, AccountService accounts, CancellationToken ct) =>

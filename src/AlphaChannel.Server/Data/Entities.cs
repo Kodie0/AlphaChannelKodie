@@ -24,14 +24,14 @@ internal sealed class Account
 
     public DateTime CreatedAtUtc { get; set; }
 
-    // Profile - all client-editable via PATCH /me. AvatarIcon is a key into a curated icon set the
-    // client presents (a FontAwesomeIcon name), not free text/an uploaded image - keeps this out of
-    // the file-hosting/content-moderation business entirely while still giving some personalization.
-    // Bio/StatusMessage are visible content like DisplayName, so they're reportable the same way
-    // (see Report.ReportedAccountId - an account-level report already covers profile content, no
-    // new report type needed).
+    // Profile - all client-editable via PATCH /me (icon/color/bio/status) plus POST/DELETE /me/avatar
+    // for an optional uploaded picture. AvatarIcon is a key into a curated FontAwesome set used as
+    // the fallback chip when AvatarImagePath is null (or while the image is still loading client-
+    // side). Uploaded images are stored under data/avatars/ and served at GET /avatars/{file}.
     public string? AvatarIcon { get; set; }
     public string AvatarColorHex { get; set; } = "#9966FA";
+    // Filename only (e.g. "{accountId}.png") inside the avatars storage root — never a client path.
+    public string? AvatarImagePath { get; set; }
     public string? Bio { get; set; }
     public string? StatusMessage { get; set; }
 

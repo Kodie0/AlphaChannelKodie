@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using AlphaChannel.Contracts;
+using AlphaChannel.Server.Auth;
 using AlphaChannel.Server.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -94,7 +95,8 @@ internal sealed class FriendService(
     }
 
     private static AccountProfileDto ToProfileDto(Account a, long? friendsSinceUnix) => new(
-        a.Id.ToString(), a.Handle, a.DisplayName, a.AvatarIcon, a.AvatarColorHex, a.Bio, a.StatusMessage, friendsSinceUnix);
+        a.Id.ToString(), a.Handle, a.DisplayName, a.AvatarIcon, a.AvatarColorHex, a.Bio, a.StatusMessage,
+        friendsSinceUnix, AvatarStorage.ToPublicUrl(a.AvatarImagePath));
 
     public async Task<List<FriendDto>> GetFriendsAsync(Guid accountId, CancellationToken cancellationToken)
     {
@@ -116,7 +118,7 @@ internal sealed class FriendService(
             .Select(a => new FriendDto(a.Id.ToString(), a.Handle, a.DisplayName,
                 directory.TryGetSocket(a.Id.ToString(), out _),
                 PresenceLabels.WatchingLabel(a.Id.ToString(), rooms, directory, liveDirectory),
-                a.AvatarIcon, a.AvatarColorHex, a.StatusMessage))
+                a.AvatarIcon, a.AvatarColorHex, a.StatusMessage, AvatarStorage.ToPublicUrl(a.AvatarImagePath)))
             .ToList();
     }
 
@@ -199,7 +201,8 @@ internal sealed class FriendService(
             .Where(a => !blockedIds.Contains(a.Id) && !LalafellVisibility.IsHiddenFrom(caller, a, settings))
             .Take(SearchResultLimit)
             .Select(a => new FriendSearchResultDto(a.Id.ToString(), a.DisplayName, a.AvatarIcon, a.AvatarColorHex,
-                relationByOtherId.GetValueOrDefault(a.Id, FriendSearchRelation.None)))
+                relationByOtherId.GetValueOrDefault(a.Id, FriendSearchRelation.None),
+                AvatarStorage.ToPublicUrl(a.AvatarImagePath)))
             .ToList();
     }
 

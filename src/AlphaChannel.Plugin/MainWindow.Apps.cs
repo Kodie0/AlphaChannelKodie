@@ -4,8 +4,8 @@ using Dalamud.Interface.Utility.Raii;
 
 namespace AlphaChannel.Plugin;
 
-// Apps launcher under More — companion apps as clickable tiles (Tweeter today).
-// Alpha Chat stays in Social. Hit-testing matches Home tiles: InvisibleButton inside the card.
+// Apps launcher — companion features that shouldn't crowd the main watch path.
+// Alpha Chat + Plugin Hub + Tweeter open as their own pages with a back link to Apps.
 internal sealed partial class MainWindow
 {
     private void DrawApps()
@@ -19,15 +19,29 @@ internal sealed partial class MainWindow
         var tileWidth = MathF.Min(300f, (avail - gap) / 2f);
         const float tileHeight = 120f;
 
+        if (DrawAppTile(tileWidth, tileHeight, FontAwesomeIcon.Comment, Hex(0xA78BFA),
+                "Alpha Chat", "Private E2E messages and group chats with friends."))
+        {
+            conversationsDirty = true;
+            currentPage = HomePage.Messages;
+        }
+
+        ImGui.SameLine(0, gap);
+        if (DrawAppTile(tileWidth, tileHeight, FontAwesomeIcon.PuzzlePiece, Accent,
+                "Plugin Hub", "See which Dalamud plugins you and your friends have enabled."))
+        {
+            myPluginsDirty = true;
+            currentPage = HomePage.PluginHub;
+        }
+
+        ImGui.Spacing();
+        ImGui.Spacing();
+
         if (DrawAppTile(tileWidth, tileHeight, FontAwesomeIcon.Feather, Hex(0x38BDF8),
                 "Tweeter", "Short posts for people you follow."))
         {
             currentPage = HomePage.Tweeter;
         }
-
-        ImGui.SameLine(0, gap);
-        DrawAppTile(tileWidth, tileHeight, FontAwesomeIcon.PuzzlePiece, Accent,
-            "Coming soon", "More Alpha apps will land here.", enabled: false);
     }
 
     // Returns true when the tile is clicked (enabled tiles only).
@@ -46,7 +60,8 @@ internal sealed partial class MainWindow
         using (ImRaii.PushColor(ImGuiCol.ChildBg, CardBg))
         using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(18, 16)))
         using (ImRaii.PushStyle(ImGuiStyleVar.ChildRounding, 16f))
-        using (var card = ImRaii.Child("##appCard", new Vector2(width, height), false, ImGuiWindowFlags.NoScrollbar))
+        using (var card = ImRaii.Child("##appCard", new Vector2(width, height), false,
+                   PaddedChild | ImGuiWindowFlags.NoScrollbar))
         {
             if (card)
             {

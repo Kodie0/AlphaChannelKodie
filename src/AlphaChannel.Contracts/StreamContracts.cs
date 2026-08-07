@@ -36,6 +36,10 @@ public static class SignalType
     // the client-side note on why that's fine here). Reaction carries a short glyph/emoji, not a
     // free-text field - this is a fun reaction burst, not a chat feature.
     public const string StreamReaction = "stream.reaction";
+
+    // Watch-party chat: short free-text lines broadcast to everyone in the room (host + viewers).
+    // Ephemeral to the room lifetime — not Alpha Chat / E2E DMs.
+    public const string StreamChat = "stream.chat";
 }
 
 // Same flat envelope shape as Aetherphone's CallControl, trimmed to only the fields the stream.*
@@ -50,6 +54,9 @@ public sealed record StreamControl
     public string? Reason { get; init; }
     public ParticipantInfo[]? Participants { get; init; }
     public string? Reaction { get; init; }
+
+    // stream.chat body — capped client-side; server relays blindly like reactions.
+    public string? ChatText { get; init; }
 
     public string? Url { get; init; }
     public double? PositionSeconds { get; init; }

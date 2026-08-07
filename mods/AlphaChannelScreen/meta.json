@@ -1,0 +1,10 @@
+{
+  "FileVersion": 3,
+  "Name": "AlphaChannel Screen",
+  "Author": "AlphaChannel",
+  "Description": "PARKED — Thunderdome-style brand panel for later. Live video uses AlphaChannel ScreenPainter; this Penumbra pack is optional / not required right now. See README.",
+  "Version": "0.2.0",
+  "Website": "https://github.com/vinney491-dotcom/AlphaChannel",
+  "ModTags": ["vfx", "dj", "stream", "alphachannel"],
+  "DefaultPreferredItems": []
+}

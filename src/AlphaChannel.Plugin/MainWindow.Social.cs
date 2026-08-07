@@ -142,7 +142,7 @@ internal sealed partial class MainWindow
             foreach (var friend in friends)
             {
                 ImGui.PushID(friend.AccountId);
-                DrawAvatarChip(friend.AvatarIcon, friend.AvatarColorHex, 20);
+                DrawAvatarChip(friend.AvatarIcon, friend.AvatarColorHex, 20, friend.AvatarImageUrl);
                 ImGui.SameLine();
                 using (ImRaii.PushFont(UiBuilder.IconFont))
                 {
@@ -323,7 +323,7 @@ internal sealed partial class MainWindow
         foreach (var result in friendSearchResults)
         {
             ImGui.PushID(result.AccountId);
-            DrawAvatarChip(result.AvatarIcon, result.AvatarColorHex, 20);
+            DrawAvatarChip(result.AvatarIcon, result.AvatarColorHex, 20, result.AvatarImageUrl);
             ImGui.SameLine();
             ImGui.Text(result.DisplayName);
             ImGui.SameLine();

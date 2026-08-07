@@ -44,9 +44,12 @@ public sealed record AuthPollResponse(
 // Deliberately excludes the verified character name/world - see AlphaChannel.Server.Data.Account's
 // doc comment. Self-view only (GET/PATCH /me) - includes InviteCode, which must never be exposed
 // when viewing someone else's profile (see AccountProfileDto below for that case).
+// AvatarImageUrl is a relative path like /avatars/{file} when the player uploaded a custom pic;
+// clients resolve it against the relay base URL. Null = use AvatarIcon + AvatarColorHex chip.
 public sealed record AccountSummary(
     string AccountId, string Handle, string DisplayName, string InviteCode,
-    string? AvatarIcon, string AvatarColorHex, string? Bio, string? StatusMessage);
+    string? AvatarIcon, string AvatarColorHex, string? Bio, string? StatusMessage,
+    string? AvatarImageUrl);
 
 // The one deliberate exception to "real character name/world is never returned to a client" - only
 // ever the caller's own linked characters, via GET /me/characters, never anyone else's.
@@ -60,8 +63,8 @@ public sealed record OnboardingRequest(string[] Races, bool WantsToSeeLalafellCo
 // FriendService.FindAccountByDisplayNameAsync) is also the add-a-friend lookup key - a chosen
 // "gamer tag" players can actually remember and share, unlike the random Handle. Must be unique
 // (case-insensitive); the server returns 409 if it's taken. AvatarIcon is a key into a client-side
-// curated icon set (see Account.AvatarIcon's doc comment), not an uploaded image. Every field is
-// null-means-unchanged, so a caller can update just one at a time.
+// curated icon set used when no custom AvatarImageUrl is set. Every field is null-means-unchanged,
+// so a caller can update just one at a time. Custom pictures use POST/DELETE /me/avatar instead.
 public sealed record UpdateProfileRequest(
     string? DisplayName, string? AvatarIcon, string? AvatarColorHex, string? Bio, string? StatusMessage);
 
@@ -69,4 +72,5 @@ public sealed record UpdateProfileRequest(
 // instead). FriendsSinceUnix is null when viewing your own profile.
 public sealed record AccountProfileDto(
     string AccountId, string Handle, string DisplayName,
-    string? AvatarIcon, string AvatarColorHex, string? Bio, string? StatusMessage, long? FriendsSinceUnix);
+    string? AvatarIcon, string AvatarColorHex, string? Bio, string? StatusMessage, long? FriendsSinceUnix,
+    string? AvatarImageUrl);

@@ -5,8 +5,7 @@ using Dalamud.Interface.Utility.Raii;
 
 namespace AlphaChannel.Plugin;
 
-// Player is the transport deck — stage for what's on screen, then a flat URL strip and lists.
-// Not a stack of identical cards; the stage is the identity.
+// Player transport deck — only draws the stage while something is actually playing.
 internal sealed partial class MainWindow
 {
     private string urlInput = string.Empty;
@@ -20,22 +19,24 @@ internal sealed partial class MainWindow
 
     private void DrawPlayback()
     {
+        if (queue.Current is not { } current)
+        {
+            if (video.LastError is { } idleError)
+            {
+                ImGui.TextColored(Danger, idleError);
+            }
+
+            return;
+        }
+
         var (position, duration, isPaused) = video.GetProgress();
 
         DrawStage("##nowPlaying", () =>
         {
-            if (queue.Current is { } current)
-            {
-                ImGui.TextColored(Accent, "NOW PLAYING");
-                ImGui.SetWindowFontScale(1.25f);
-                ImGui.TextWrapped(current.Title);
-                ImGui.SetWindowFontScale(1f);
-            }
-            else
-            {
-                ImGui.TextColored(MutedText, "Nothing playing");
-                ImGui.TextWrapped("Paste a YouTube/Twitch link below, or search under Find a video.");
-            }
+            ImGui.TextColored(Accent, "NOW PLAYING");
+            ImGui.SetWindowFontScale(1.25f);
+            ImGui.TextWrapped(current.Title);
+            ImGui.SetWindowFontScale(1f);
 
             if (!seekDragging)
             {
@@ -84,34 +85,6 @@ internal sealed partial class MainWindow
                 queue.Clear();
             }
         });
-
-        ImGui.TextColored(MutedText, "Paste a link");
-        ImGui.SetNextItemWidth(-70f);
-        var submittedUrl = ImGui.InputTextWithHint("##url", "https://…", ref urlInput, 2000,
-            ImGuiInputTextFlags.EnterReturnsTrue);
-        ImGui.SameLine();
-        if (ImGui.Button("Paste"))
-        {
-            var clipboard = ImGui.GetClipboardText();
-            if (!string.IsNullOrWhiteSpace(clipboard))
-            {
-                urlInput = clipboard.Trim();
-            }
-        }
-
-        var playNowClicked = ImGui.Button("Play now", new Vector2(120, 30));
-        if ((submittedUrl || playNowClicked) && urlInput.Length > 0)
-        {
-            queue.PlayNow(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
-            urlInput = string.Empty;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Add to queue", new Vector2(120, 30)) && urlInput.Length > 0)
-        {
-            queue.Add(new VideoQueueEntry(urlInput, urlInput, string.Empty, null, null));
-            urlInput = string.Empty;
-        }
 
         ImGui.Spacing();
     }

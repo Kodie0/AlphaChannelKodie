@@ -91,7 +91,20 @@ internal sealed class ConnectionHandler(
                             break;
                         }
 
-                        var target = rooms.FindRoomHostedBy(resolvedHostId) ?? rooms.GetOrCreateRoom(resolvedHostId);
+                        // Only join an existing room that has published state — do not create an
+                        // empty room for someone who isn't hosting (NearbyAutoWatch walks the floor
+                        // trying character names; GetOrCreateRoom here would spam ghost rooms).
+                        var target = rooms.FindRoomHostedBy(resolvedHostId);
+                        if (target is null || target.LastState is null)
+                        {
+                            await SendAsync(socket, new StreamControl
+                            {
+                                Type = SignalType.StreamDeclined,
+                                Reason = "Host is not streaming.",
+                            }, token).ConfigureAwait(false);
+                            break;
+                        }
+
                         target.Viewers[userId] = socket;
                         viewingHostId = target.RoomKey;
                         await SendAsync(socket, new StreamControl { Type = SignalType.StreamJoined, HostId = target.HostUserId },
@@ -166,6 +179,29 @@ internal sealed class ConnectionHandler(
                             reactionHostSocket is not null)
                         {
                             await SendAsync(reactionHostSocket, reaction, token).ConfigureAwait(false);
+                        }
+
+                        break;
+
+                    case SignalType.StreamChat when message.ChatText is { Length: > 0 }:
+                        var chatRoom = rooms.FindRoomHostedBy(userId) ??
+                            (viewingHostId is { } chatRoomKey ? rooms.GetRoom(chatRoomKey) : null);
+                        if (chatRoom is null)
+                        {
+                            break;
+                        }
+
+                        var chat = message with
+                        {
+                            UserId = userId,
+                            DisplayName = directory.DisplayNameOrFallback(userId),
+                            ChatText = message.ChatText.Length > 280 ? message.ChatText[..280] : message.ChatText,
+                        };
+                        await BroadcastAsync(chatRoom, chat, token).ConfigureAwait(false);
+                        if (directory.TryGetSocket(chatRoom.HostUserId, out var chatHostSocket) &&
+                            chatHostSocket is not null)
+                        {
+                            await SendAsync(chatHostSocket, chat, token).ConfigureAwait(false);
                         }
 
                         break;

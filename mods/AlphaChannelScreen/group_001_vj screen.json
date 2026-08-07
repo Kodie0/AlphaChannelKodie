@@ -1,0 +1,29 @@
+{
+  "Version": 0,
+  "Name": "VJ Screen",
+  "Description": "Provides AlphaChannel brand screen VFX files (vfx/alphachannel/*). Bind to an emote in VFXEditor — see README.",
+  "Image": "",
+  "Page": 0,
+  "Priority": 0,
+  "Type": "Single",
+  "DefaultSettings": 1,
+  "Options": [
+    {
+      "Name": "Off",
+      "Description": "",
+      "Files": {},
+      "FileSwaps": {},
+      "Manipulations": []
+    },
+    {
+      "Name": "Brand panel",
+      "Description": "Exposes vfx/alphachannel/screen.avfx + brand.atex for Lightless sync. Attach via VFXEditor to your stage emote.",
+      "Files": {
+        "vfx/alphachannel/screen.avfx": "vfx\\alphachannel\\screen.avfx",
+        "vfx/alphachannel/brand.atex": "vfx\\alphachannel\\brand.atex"
+      },
+      "FileSwaps": {},
+      "Manipulations": []
+    }
+  ]
+}

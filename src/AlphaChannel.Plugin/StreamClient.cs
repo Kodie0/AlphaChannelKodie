@@ -46,6 +46,7 @@ internal sealed class StreamClient : IDisposable
     // frame, so this needs to be thread-safe for that handoff, same reasoning as everywhere else
     // in this plugin that crosses from the receive loop back to the main thread.
     internal ConcurrentQueue<(string SenderUserId, string Glyph)> IncomingReactions { get; } = new();
+    internal ConcurrentQueue<(string DisplayName, string Text)> IncomingChat { get; } = new();
 
     internal event Action<StreamControl>? OnState;
     internal event Action? OnJoined;
@@ -216,6 +217,7 @@ internal sealed class StreamClient : IDisposable
             case SignalType.StreamEnded:
                 Mode = StreamMode.None;
                 HostId = null;
+                IncomingChat.Clear();
                 OnEnded?.Invoke();
                 break;
 
@@ -240,6 +242,10 @@ internal sealed class StreamClient : IDisposable
             case SignalType.StreamReaction when message.Reaction is { Length: > 0 } glyph &&
                 message.UserId is { Length: > 0 } senderId:
                 IncomingReactions.Enqueue((senderId, glyph));
+                break;
+
+            case SignalType.StreamChat when message.ChatText is { Length: > 0 } text:
+                IncomingChat.Enqueue((message.DisplayName ?? message.UserId ?? "Someone", text));
                 break;
         }
     }
@@ -311,6 +317,9 @@ internal sealed class StreamClient : IDisposable
     internal Task SendReactionAsync(string glyph) =>
         SendAsync(new StreamControl { Type = SignalType.StreamReaction, Reaction = glyph });
 
+    internal Task SendChatAsync(string text) =>
+        SendAsync(new StreamControl { Type = SignalType.StreamChat, ChatText = text });
+
     internal async Task LeaveAsync()
     {
         if (Mode == StreamMode.None)
@@ -322,6 +331,7 @@ internal sealed class StreamClient : IDisposable
         Mode = StreamMode.None;
         HostId = null;
         Roster = [];
+        IncomingChat.Clear();
     }
 
     private async Task SendAsync(StreamControl message)

@@ -88,6 +88,56 @@ internal sealed class AuthClient(Configuration configuration)
         }
     }
 
+    internal async Task<AccountSummary?> UploadAvatarAsync(string bearerToken, string filePath)
+    {
+        using var http = Http;
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        try
+        {
+            await using var stream = File.OpenRead(filePath);
+            using var content = new MultipartFormDataContent();
+            var part = new StreamContent(stream);
+            part.Headers.ContentType = new MediaTypeHeaderValue(GuessImageMime(filePath));
+            content.Add(part, "file", Path.GetFileName(filePath));
+
+            var response = await http.PostAsync("/me/avatar", content).ConfigureAwait(false);
+            return response.IsSuccessStatusCode
+                ? await response.Content.ReadFromJsonAsync<AccountSummary>().ConfigureAwait(false)
+                : null;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning($"[Auth] avatar upload failed: {exception.Message}");
+            return null;
+        }
+    }
+
+    internal async Task<AccountSummary?> ClearAvatarAsync(string bearerToken)
+    {
+        using var http = Http;
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        try
+        {
+            var response = await http.DeleteAsync("/me/avatar").ConfigureAwait(false);
+            return response.IsSuccessStatusCode
+                ? await response.Content.ReadFromJsonAsync<AccountSummary>().ConfigureAwait(false)
+                : null;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning($"[Auth] avatar clear failed: {exception.Message}");
+            return null;
+        }
+    }
+
+    private static string GuessImageMime(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".png" => "image/png",
+        ".webp" => "image/webp",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        _ => "application/octet-stream",
+    };
+
     // Null covers both "not found" and "not viewable" (not friends) - server returns 404 either
     // way, see FriendService.GetProfileAsync's own doc comment on why those stay indistinguishable.
     internal async Task<AccountProfileDto?> GetProfileAsync(string bearerToken, string accountId)

@@ -16,7 +16,8 @@ internal sealed partial class MainWindow
             return;
         }
 
-        using var child = ImRaii.Child("##queueList", new Vector2(-1, 200), false);
+        using var child = ImRaii.Child("##queueList", new Vector2(-1, 200), false,
+            ImGuiWindowFlags.NoScrollbar);
         if (!child)
         {
             return;
@@ -29,7 +30,8 @@ internal sealed partial class MainWindow
 
             using (ImRaii.PushColor(ImGuiCol.ChildBg, CardBg))
             using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(12, 10)))
-            using (var row = ImRaii.Child($"##qrow{entry.Id}", new Vector2(-1, 56), false, ImGuiWindowFlags.NoScrollbar))
+            using (var row = ImRaii.Child($"##qrow{entry.Id}", new Vector2(-1, 56), false,
+                       PaddedChild | ImGuiWindowFlags.NoScrollbar))
             {
                 if (row)
                 {

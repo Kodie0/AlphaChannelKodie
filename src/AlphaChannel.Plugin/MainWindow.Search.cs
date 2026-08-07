@@ -28,54 +28,7 @@ internal sealed partial class MainWindow
     private bool trendingDirty = true;
     private TwitchStreamDto[] trendingStreams = [];
 
-    // Manual YouTube/Twitch switch — Home tiles set pendingSearchTab; avoid ImGui TabBar SetSelected.
-    private int searchTab;
-
-    private void DrawSearch()
-    {
-        if (pendingSearchTab == "YouTube")
-        {
-            searchTab = 0;
-            pendingSearchTab = null;
-        }
-        else if (pendingSearchTab == "Twitch")
-        {
-            searchTab = 1;
-            pendingSearchTab = null;
-        }
-
-        DrawSearchTabButton("YouTube", 0);
-        ImGui.SameLine();
-        DrawSearchTabButton("Twitch", 1);
-
-        ImGui.Spacing();
-        ImGui.Spacing();
-
-        if (searchTab == 0)
-        {
-            DrawYouTubeSearch();
-        }
-        else
-        {
-            DrawTwitchCheck();
-        }
-    }
-
-    private void DrawSearchTabButton(string label, int tab)
-    {
-        var selected = searchTab == tab;
-        using (ImRaii.PushColor(ImGuiCol.Button, selected ? Accent : CardBg)
-                   .Push(ImGuiCol.ButtonHovered, selected ? AccentHover : CardBgHover)
-                   .Push(ImGuiCol.ButtonActive, selected ? AccentActive : CardBgHover)
-                   .Push(ImGuiCol.Text, selected ? Vector4.One : MutedText))
-        {
-            if (ImGui.Button(label, new Vector2(110, 30)))
-            {
-                searchTab = tab;
-            }
-        }
-    }
-
+    // Manual YouTube/Twitch panels — Player source tabs call these directly.
     private void DrawYouTubeSearch()
     {
         ImGui.TextColored(MutedText, "Search YouTube");

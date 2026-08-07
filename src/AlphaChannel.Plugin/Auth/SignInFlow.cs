@@ -88,6 +88,7 @@ internal sealed class SignInFlow(AuthClient authClient)
                         DisplayName = poll.Account.DisplayName,
                         AvatarIcon = poll.Account.AvatarIcon,
                         AvatarColorHex = poll.Account.AvatarColorHex,
+                        AvatarImageUrl = poll.Account.AvatarImageUrl,
                         Bio = poll.Account.Bio,
                         StatusMessage = poll.Account.StatusMessage,
                         InviteCode = poll.Account.InviteCode,

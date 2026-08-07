@@ -202,7 +202,39 @@ internal sealed class AccountService(
 
     internal static AccountSummary ToSummary(Account account) => new(
         account.Id.ToString(), account.Handle, account.DisplayName, account.InviteCode,
-        account.AvatarIcon, account.AvatarColorHex, account.Bio, account.StatusMessage);
+        account.AvatarIcon, account.AvatarColorHex, account.Bio, account.StatusMessage,
+        AvatarStorage.ToPublicUrl(account.AvatarImagePath));
+
+    public async Task<UpdateProfileOutcome> SetAvatarImageAsync(
+        Guid accountId, string fileName, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var account = await db.Accounts.FirstOrDefaultAsync(a => a.Id == accountId, cancellationToken);
+        if (account is null)
+        {
+            return new UpdateProfileOutcome(UpdateProfileResult.NotFound, null);
+        }
+
+        account.AvatarImagePath = fileName;
+        await db.SaveChangesAsync(cancellationToken);
+        return new UpdateProfileOutcome(UpdateProfileResult.Updated, ToSummary(account));
+    }
+
+    public async Task<UpdateProfileOutcome> ClearAvatarImageAsync(
+        Guid accountId, AvatarStorage storage, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var account = await db.Accounts.FirstOrDefaultAsync(a => a.Id == accountId, cancellationToken);
+        if (account is null)
+        {
+            return new UpdateProfileOutcome(UpdateProfileResult.NotFound, null);
+        }
+
+        storage.DeleteIfExists(account.AvatarImagePath);
+        account.AvatarImagePath = null;
+        await db.SaveChangesAsync(cancellationToken);
+        return new UpdateProfileOutcome(UpdateProfileResult.Updated, ToSummary(account));
+    }
 
     private Task NotifyPendingReviewAsync(Account account, string characterName, string world) =>
         discord.NotifyAsync(

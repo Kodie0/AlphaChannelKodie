@@ -13,6 +13,8 @@ internal sealed class CharacterSession
     public string DisplayName { get; set; } = "";
     public string? AvatarIcon { get; set; }
     public string AvatarColorHex { get; set; } = "#9966FA";
+    // Relative relay path (/avatars/...) when a custom picture is set; null = icon+color chip.
+    public string? AvatarImageUrl { get; set; }
     public string? Bio { get; set; }
     public string? StatusMessage { get; set; }
 

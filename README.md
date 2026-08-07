@@ -33,11 +33,10 @@ a display name (defaults to your character name).
 - Drag the screen into position with the Screen controls, save it as a named preset if you want to
   reuse that spot later. The power button next to playback controls fully closes the in-world
   screen when you're done.
-- **Watch-along**: right-click a friend who's also running AlphaChannel and choose *Join Stream*,
-  or type their in-plugin display name under Watch-along -> Join. Whoever's hosting can hand
-  control to a viewer at any time ("Make host" next to their name in the roster), and can copy a
-  ready-made party-chat invite message with one click. You can rename yourself at any time from
-  the Rename button next to your connection status.
+- **Watch-along / DJ floor**: right-click a friend who's also running AlphaChannel and choose
+  *Join Stream*, or type `/achannel watch <name>` — the screen joins for AlphaChannel users.
+  Whoever's hosting can hand control to a viewer ("Make host") and can copy a party-chat invite.
+  Rename anytime from the Rename control next to connection status.
 - The video auto-pauses if the host enters combat or a cutscene, and resumes after.
 - Send quick emoji reactions during a watch-along - they fly up across the in-world screen for
   everyone watching, not just your own window.

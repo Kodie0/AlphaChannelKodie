@@ -35,6 +35,10 @@ internal sealed class Configuration : IPluginConfiguration
 
     public string RelayServerUrl { get; set; } = "https://alphachannel.duckdns.org";
 
+    // Off by default — prod/dev stack switcher stays out of player Settings. Flip true in the
+    // plugin config JSON only when you need to point this install at the isolated dev relay.
+    public bool ShowServerStackSwitcher { get; set; }
+
     // Keyed by IClientState.LocalContentId, same idiom as CharacterDisplayNames below - a
     // character's sign-in is tied to the FFXIV character, not the plugin install. Two entries can
     // point at the same AccountId once linked (see Auth/AuthClient.cs). Only Watch-along, Friends,
@@ -79,6 +83,21 @@ internal sealed class Configuration : IPluginConfiguration
     // Plugin window chrome palette - see UiTheme.cs / ThemeCatalog. Defaults to Purple (mockup).
     public UiTheme UiTheme { get; set; } = UiTheme.Purple;
 
+    // Window/sidebar/card surfaces — independent of accent color. Theme = use the accent pack's defaults.
+    public UiBackground UiBackground { get; set; } = UiBackground.Theme;
+
+    // Copied under the plugin config folder when the player applies a custom image (png/jpg/webp).
+    public string? CustomBackgroundPath { get; set; }
+
+    // Dark overlay strength over the custom image (0 = full photo, 1 = fully dimmed).
+    public float CustomBackgroundDim { get; set; } = 0.30f;
+
+    // Home welcome illustration (couch / castle art). Off = text + CTA only.
+    public bool ShowHomeHeroImage { get; set; } = true;
+
+    // Optional replacement for the bundled Home hero art (copied under Backgrounds/).
+    public string? CustomHomeHeroPath { get; set; }
+
     // Persist native /tell history per character under the plugin config directory (Whispers/).
     // Off = session-only mirror; on = Linkpearl-style archive (default).
     public bool ArchiveWhispersToDisk { get; set; } = true;
@@ -87,6 +106,13 @@ internal sealed class Configuration : IPluginConfiguration
     // MaximizedPosition / MinimizedPosition so minimize/restore/reopen land where you left them.
     public Vector2? MaximizedPosition { get; set; }
     public Vector2? MinimizedPosition { get; set; }
+
+    // Walk-up auto-view for public DJ sets and streams. Off by default — probing nearby players
+    // can feel like the UI is reloading until a real public host is found.
+    public bool AutoWatchNearby { get; set; } = false;
+
+    // How close (yalms) another player must be before AutoWatchNearby tries to join them.
+    public float AutoWatchRadiusYalms { get; set; } = 18f;
 
     public Vector3 ScreenPosition { get; set; }
     public float ScreenYaw { get; set; }

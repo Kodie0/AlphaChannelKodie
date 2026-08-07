@@ -35,6 +35,19 @@ internal sealed class ThumbnailCache : IDisposable
         return null;
     }
 
+    public void Invalidate(string? url)
+    {
+        if (string.IsNullOrEmpty(url))
+        {
+            return;
+        }
+
+        if (cache.TryRemove(url, out var wrap))
+        {
+            wrap?.Dispose();
+        }
+    }
+
     private async Task LoadAsync(string url)
     {
         try

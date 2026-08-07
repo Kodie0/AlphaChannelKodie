@@ -169,7 +169,8 @@ internal sealed partial class MainWindow
         if (post.RepostOfPostId is { Length: > 0 })
         {
             using (ImRaii.PushColor(ImGuiCol.ChildBg, CardBg))
-            using (var repostBox = ImRaii.Child("##repost", new Vector2(-1, 0), true, ImGuiWindowFlags.AlwaysAutoResize))
+            using (var repostBox = ImRaii.Child("##repost", new Vector2(-1, 0), true,
+                       ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoScrollbar))
             {
                 if (repostBox)
                 {

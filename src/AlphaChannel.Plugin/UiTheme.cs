@@ -8,6 +8,18 @@ internal enum UiTheme
     Red = 3,
 }
 
+// Window surfaces only — accent still comes from UiTheme.
+internal enum UiBackground
+{
+    Theme = 0,   // keep the accent theme's built-in surfaces
+    Midnight = 1,
+    Void = 2,
+    Slate = 3,
+    Warm = 4,
+    Carbon = 5,
+    Custom = 6,  // user image from Settings
+}
+
 internal readonly record struct ThemeColors(
     Vector4 Accent,
     Vector4 AccentHover,
@@ -43,13 +55,87 @@ internal static class ThemeCatalog
         _ => theme.ToString(),
     };
 
-    internal static ThemeColors Get(UiTheme theme) => theme switch
+    internal static string Label(UiBackground background) => background switch
     {
-        UiTheme.Gold => Gold,
-        UiTheme.Green => Green,
-        UiTheme.Red => Red,
-        _ => Purple,
+        UiBackground.Theme => "Theme",
+        UiBackground.Midnight => "Midnight",
+        UiBackground.Void => "Void",
+        UiBackground.Slate => "Slate",
+        UiBackground.Warm => "Warm",
+        UiBackground.Carbon => "Carbon",
+        UiBackground.Custom => "Custom",
+        _ => background.ToString(),
     };
+
+    // Swatch shown in Settings for the background picker — match the real window tones.
+    internal static Vector4 Swatch(UiBackground background) => background switch
+    {
+        UiBackground.Midnight => Hex(0x050816),
+        UiBackground.Void => Hex(0x000000),
+        UiBackground.Slate => Hex(0x1A2436),
+        UiBackground.Warm => Hex(0x1C130E),
+        UiBackground.Carbon => Hex(0x12151C),
+        UiBackground.Custom => Hex(0x4A5568),
+        _ => Hex(0x0A0E1A),
+    };
+
+    internal static ThemeColors Get(UiTheme theme, UiBackground background = UiBackground.Theme)
+    {
+        var colors = theme switch
+        {
+            UiTheme.Gold => Gold,
+            UiTheme.Green => Green,
+            UiTheme.Red => Red,
+            _ => Purple,
+        };
+
+        // Custom uses Midnight panel tones under the user image.
+        if (background is UiBackground.Theme)
+        {
+            return colors;
+        }
+
+        var surface = background == UiBackground.Custom ? UiBackground.Midnight : background;
+        return WithBackground(colors, surface);
+    }
+
+    private static ThemeColors WithBackground(ThemeColors baseColors, UiBackground background)
+    {
+        // Presets are intentionally far apart so picking one reads immediately (not near-black siblings).
+        var (window, sidebar, card, cardHover, frame, frameHover, muted) = background switch
+        {
+            // Pure black — flattest, highest contrast
+            UiBackground.Void => (Hex(0x000000), Hex(0x080808), Hex(0x141414), Hex(0x1E1E1E),
+                Hex(0x181818), Hex(0x262626), Hex(0xA0A0A0)),
+
+            // Cool steel-blue, clearly lighter than Midnight
+            UiBackground.Slate => (Hex(0x1A2436), Hex(0x222D42), Hex(0x2A364E), Hex(0x364560),
+                Hex(0x253147), Hex(0x31405A), Hex(0xA8B4C8)),
+
+            // Espresso / brown — warm hue you can spot at a glance
+            UiBackground.Warm => (Hex(0x1C130E), Hex(0x261A12), Hex(0x322418), Hex(0x3E2E1E),
+                Hex(0x2A1E14), Hex(0x38281A), Hex(0xC4B19A)),
+
+            // Cool graphite with a blue-violet cast
+            UiBackground.Carbon => (Hex(0x12151C), Hex(0x181C28), Hex(0x222836), Hex(0x2C3444),
+                Hex(0x1C2230), Hex(0x282F40), Hex(0x9AA3B5)),
+
+            // Deep indigo navy (default named preset / Custom underlay)
+            _ => (Hex(0x050816), Hex(0x0A1022), Hex(0x121A30), Hex(0x1A2440),
+                Hex(0x101828), Hex(0x182038), Hex(0x8E9AB4)), // Midnight
+        };
+
+        return baseColors with
+        {
+            WindowBg = window,
+            SidebarBg = sidebar,
+            CardBg = card,
+            CardBgHover = cardHover,
+            FrameBg = frame,
+            FrameBgHover = frameHover,
+            MutedText = muted,
+        };
+    }
 
     private static readonly ThemeColors Purple = new(
         Accent: Hex(0x8B5CF6),

@@ -35,6 +35,8 @@ services:
       - MEDIAMTX_WEBHOOK_SECRET=${MEDIAMTX_WEBHOOK_SECRET}
       - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
       - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
+    volumes:
+      - avatar_data:/app/data/avatars
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,6 +122,8 @@ services:
       - MEDIAMTX_WEBHOOK_SECRET=${MEDIAMTX_WEBHOOK_SECRET}
       - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
       - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
+    volumes:
+      - avatar_dev_data:/app/data/avatars
     depends_on:
       postgres-dev:
         condition: service_healthy
@@ -129,3 +133,5 @@ volumes:
   caddy_config:
   postgres_data:
   postgres_dev_data:
+  avatar_data:
+  avatar_dev_data:

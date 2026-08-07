@@ -217,7 +217,7 @@ internal sealed partial class MainWindow
         var rows = (plugins.Length + 1) / 2;
         var needed = MathF.Min(maxHeight, MathF.Max(rows * lineH + 8f, lineH + 8f));
 
-        using (var child = ImRaii.Child(childId, new Vector2(0, needed), false))
+        using (var child = ImRaii.Child(childId, new Vector2(0, needed), false, ImGuiWindowFlags.NoScrollbar))
         {
             if (!child)
             {
@@ -286,7 +286,7 @@ internal sealed partial class MainWindow
         const float maxHeight = 100f;
         var lineH = ImGui.GetTextLineHeightWithSpacing();
         var needed = MathF.Min(maxHeight, friends.Length * lineH + 4f);
-        using (var child = ImRaii.Child("##hubFriends", new Vector2(0, needed), false))
+        using (var child = ImRaii.Child("##hubFriends", new Vector2(0, needed), false, ImGuiWindowFlags.NoScrollbar))
         {
             if (!child)
             {

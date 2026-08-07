@@ -29,16 +29,23 @@ internal sealed partial class MainWindow : Window, IDisposable
     private static Vector4 MagentaGlow => Colors.MagentaGlow;
     private static Vector4 Gold => Colors.Gold;
     private static Vector4 GoldHover => Colors.GoldHover;
-    private static Vector4 FrameBg => Colors.FrameBg;
-    private static Vector4 FrameBgHover => Colors.FrameBgHover;
+    private static Vector4 FrameBg => FadeForCustomBg(Colors.FrameBg, 0.30f);
+    private static Vector4 FrameBgHover => FadeForCustomBg(Colors.FrameBgHover, 0.38f);
     private static Vector4 Danger => Colors.Danger;
     private static Vector4 Good => Colors.Good;
-    private static Vector4 WindowBg => Colors.WindowBg;
-    private static Vector4 SidebarBg => Colors.SidebarBg;
-    private static Vector4 CardBg => Colors.CardBg;
-    private static Vector4 CardBgHover => Colors.CardBgHover;
+    // Custom wallpaper mode: panels are ~75% see-through so the image reads through.
+    private static Vector4 WindowBg => FadeForCustomBg(Colors.WindowBg, 0.22f);
+    private static Vector4 SidebarBg => FadeForCustomBg(Colors.SidebarBg, 0.28f);
+    private static Vector4 CardBg => FadeForCustomBg(Colors.CardBg, 0.25f);
+    private static Vector4 CardBgHover => FadeForCustomBg(Colors.CardBgHover, 0.35f);
     private static Vector4 MutedText => Colors.MutedText;
     private static readonly Vector4 BorderSubtle = new(1f, 1f, 1f, 0.06f);
+
+    // Set each frame in Draw() when a custom background texture is actually showing.
+    private static bool customBackgroundActive;
+
+    private static Vector4 FadeForCustomBg(Vector4 color, float alpha) =>
+        customBackgroundActive ? new Vector4(color.X, color.Y, color.Z, alpha) : color;
 
     private static Vector4 Hex(int rgb) => new(
         ((rgb >> 16) & 0xFF) / 255f,
@@ -88,13 +95,19 @@ internal sealed partial class MainWindow : Window, IDisposable
     // saves, same split as requestRename above (MainWindow owns the UI, Plugin.cs owns persistence).
     private readonly Action<CharacterSession?> onSessionChanged;
 
-    // "Smaller" than the original fullscreen 1920x1080 lock - still roomy enough for the sidebar +
-    // 3-column feature grid, but no longer takes over the whole display.
-    private static readonly Vector2 WindowSize = new(1280, 800);
+    // Room for left nav + center + optional right rail + bottom media bar (mockup chrome).
+    private static readonly Vector2 WindowSize = new(1400, 860);
     // Compact capsule chrome while tucked away - wide enough for brand + expand + close.
     private static readonly Vector2 MinimizedSize = new(276, 40);
+    // Wider capsule when "Watching First Last" is showing (viewer-only join).
+    private static readonly Vector2 MinimizedViewerSize = new(340, 40);
     private const int PositionPinFrames = 3;
     private bool windowMinimized;
+    // True after /achannel watch or context-menu Join Stream: stay minimized; screen still
+    // draws via ScreenPainter + /rt sync. Requires AlphaChannel on both sides — not Lightless.
+    private bool viewerMode;
+    // Set when NearbyAutoWatch started the join — range leave only applies to these sessions.
+    private bool proximityJoined;
     private Vector2? maximizedPosition;
     private Vector2? minimizedPosition;
     private Vector2? pendingPosition;
@@ -104,12 +117,20 @@ internal sealed partial class MainWindow : Window, IDisposable
     private string joinHostNameInput = string.Empty;
     private string? joinError;
 
-    // Always-expanded labeled sidebar matching the mockup - clear icon+label rows, ~240px.
-    private const float SidebarWidth = 240f;
+    private const float SidebarWidth = 200f;
+    private const float RightRailWidth = 260f;
+    private const float BottomBarHeight = 104f;
 
-    // Not from StreamClient - see the comment where it's set (DrawWatchAlong's Join handler) for
-    // why: HostId gets overwritten with the host's real UserId once StreamJoined arrives, so this
-    // is the only place the friendly name a viewer actually typed survives for display.
+    // Borderless Child windows ignore WindowPadding in this ImGui build unless AlwaysUseWindowPadding
+    // is set. NoScrollbar keeps chrome panes clean (navbar / cards / rails).
+    private const ImGuiWindowFlags PaddedChild = ImGuiWindowFlags.AlwaysUseWindowPadding
+        | ImGuiWindowFlags.NoScrollbar;
+
+    private const ImGuiWindowFlags NavPaneFlags = PaddedChild | ImGuiWindowFlags.NoScrollWithMouse;
+
+    // Not from StreamClient - see the comment where it's set (DoJoin) for why: HostId gets
+    // overwritten with the host's real UserId once StreamJoined arrives, so this is the only
+    // place the friendly name a viewer actually typed survives for display.
     private string? joinedHostDisplayName;
 
     private bool namePromptPending;
@@ -173,7 +194,8 @@ internal sealed partial class MainWindow : Window, IDisposable
         // than a floating dev-tool window. Actual size is set every frame in PreDraw (below), since
         // it toggles between WindowSize and MinimizedSize - SizeConstraints just has to be loose
         // enough to allow both (NoResize already blocks the player from dragging it anywhere else).
-        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse;
+        Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse
+                | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
         SizeCondition = ImGuiCond.Always;
         SizeConstraints = new WindowSizeConstraints
         {
@@ -182,8 +204,22 @@ internal sealed partial class MainWindow : Window, IDisposable
         };
 
         stream.OnJoined += () => joinError = null;
-        stream.OnDeclined += reason => joinError = string.IsNullOrEmpty(reason) ? "Could not find that host." : reason;
-        stream.OnEnded += () => joinedHostDisplayName = null;
+        stream.OnDeclined += reason =>
+        {
+            joinError = string.IsNullOrEmpty(reason) ? "Could not find that host." : reason;
+            if (proximityJoined)
+            {
+                proximityJoined = false;
+                joinedHostDisplayName = null;
+                viewerMode = false;
+            }
+        };
+        stream.OnEnded += () =>
+        {
+            joinedHostDisplayName = null;
+            viewerMode = false;
+            proximityJoined = false;
+        };
 
         maximizedPosition = Plugin.Cfg.MaximizedPosition;
         minimizedPosition = Plugin.Cfg.MinimizedPosition;
@@ -197,6 +233,80 @@ internal sealed partial class MainWindow : Window, IDisposable
         RequestPosition(maximizedPosition);
         IsOpen = true;
     }
+
+    // Full-window join (Home / Party "Join" field). Prefer OpenViewerAndJoin for quick watch.
+    internal void OpenPlayerAndJoin(string hostDisplayName)
+    {
+        proximityJoined = false;
+        viewerMode = false;
+        currentPage = HomePage.Player;
+        playerSourceTab = 0;
+        OpenUi();
+        DoJoin(hostDisplayName);
+    }
+
+    // Viewer-only: AlphaChannel required. Capsule UI + ScreenPainter; sync is still /rt URL/position
+    // (ApplyRemoteState) — no Penumbra texture pipe, so Lightless alone cannot show the screen.
+    // fromProximity: NearbyAutoWatch owns leave-on-range; manual /watch keeps the session until Leave.
+    internal void OpenViewerAndJoin(string hostDisplayName, bool fromProximity = false)
+    {
+        proximityJoined = fromProximity;
+        viewerMode = true;
+        currentPage = HomePage.Player;
+        playerSourceTab = 0;
+        SetMinimized(true);
+        RequestPosition(minimizedPosition);
+        IsOpen = true;
+        DoJoin(hostDisplayName);
+    }
+
+    // Silent proximity probe — join without opening chrome until ShowProximityViewer (URL confirmed).
+    // Does not clear the local queue (DoJoin does); wiping playback was resetting hosts' screens.
+    internal void BeginProximityJoin(string hostDisplayName)
+    {
+        if (hostDisplayName.Length == 0)
+        {
+            return;
+        }
+
+        proximityJoined = true;
+        viewerMode = true;
+        // Do not touch playerSourceTab / queue — probes must not yank the YouTube search box.
+        joinedHostDisplayName = hostDisplayName.Trim();
+        _ = stream.JoinAsync(hostDisplayName.Trim());
+    }
+
+    // True when this client is driving its own screen/queue (hosting or solo play) — auto-watch
+    // must not join/clear over the top of that.
+    internal bool HasLocalPlayback =>
+        stream.Mode == StreamMode.Hosting
+        || queue.Current is not null
+        || screenController.Engine.IsActive;
+
+    internal void ShowProximityViewer()
+    {
+        if (!proximityJoined)
+        {
+            return;
+        }
+
+        SetMinimized(true);
+        RequestPosition(minimizedPosition);
+        IsOpen = true;
+    }
+
+    internal void LeaveStream()
+    {
+        viewerMode = false;
+        proximityJoined = false;
+        joinedHostDisplayName = null;
+        _ = stream.LeaveAsync();
+    }
+
+    internal string? JoinedHostDisplayName => joinedHostDisplayName;
+    internal bool ProximityJoined => proximityJoined;
+
+    internal void ClearProximityJoin() => proximityJoined = false;
 
     internal void CloseUi()
     {
@@ -278,7 +388,9 @@ internal sealed partial class MainWindow : Window, IDisposable
     // capsule can draw its own chrome (NoBackground) without NoMove blocking drag.
     public override void PreDraw()
     {
-        Size = windowMinimized ? MinimizedSize : WindowSize;
+        Size = windowMinimized
+            ? (viewerMode ? MinimizedViewerSize : MinimizedSize)
+            : WindowSize;
         if (windowMinimized)
         {
             Flags = ImGuiWindowFlags.NoTitleBar
@@ -290,7 +402,9 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
         else
         {
-            Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse;
+            // Outer window never scrolls — Settings scrolls inside ##content instead.
+            Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse
+                    | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
         }
 
         // Pin for a few frames after minimize/restore/reopen so the size swap doesn't leave the
@@ -309,12 +423,15 @@ internal sealed partial class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        Colors = ThemeCatalog.Get(Plugin.Cfg.UiTheme);
+        Colors = ThemeCatalog.Get(Plugin.Cfg.UiTheme, Plugin.Cfg.UiBackground);
+        EnsureCustomBackgroundLoaded();
+        customBackgroundActive = Plugin.Cfg.UiBackground == UiBackground.Custom && customBackground is not null;
         using var theme = new ThemeScope();
         CaptureCurrentPosition();
 
         if (windowMinimized)
         {
+            customBackgroundActive = false;
             using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, Vector2.Zero))
             {
                 DrawMinimizedBar();
@@ -323,22 +440,21 @@ internal sealed partial class MainWindow : Window, IDisposable
             return;
         }
 
+        DrawCustomBackgroundLayer();
         DrawNamePrompt();
         DrawSignInModal();
         DrawProfilePopup();
         DrawGlowBorder();
 
-        // Explicit pixel sizes - size.y=0 was collapsing the sidebar to content-height in this
-        // Dalamud/ImGui build, which stacked Home under the brand and hid the nav rows. Master
-        // used the same Child+SameLine pattern; locking both panes to avail.Y keeps the left
-        // column as a real nav rail matching the mockup.
         var avail = ImGui.GetContentRegionAvail();
-        var sidebarSize = new Vector2(SidebarWidth, avail.Y);
-        var contentSize = new Vector2(MathF.Max(avail.X - SidebarWidth, 0f), avail.Y);
+        var topHeight = MathF.Max(avail.Y - BottomBarHeight, 120f);
+        var showRightRail = currentPage == HomePage.Home;
+        var rightWidth = showRightRail ? RightRailWidth : 0f;
+        var centerWidth = MathF.Max(avail.X - SidebarWidth - rightWidth, 0f);
 
         using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
         using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(14, 16)))
-        using (var sidebar = ImRaii.Child("##sidebar", sidebarSize, false))
+        using (var sidebar = ImRaii.Child("##sidebar", new Vector2(SidebarWidth, topHeight), false, NavPaneFlags))
         {
             if (sidebar)
             {
@@ -348,69 +464,141 @@ internal sealed partial class MainWindow : Window, IDisposable
 
         ImGui.SameLine(0, 0);
 
-        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(24, 20)))
-        using (var content = ImRaii.Child("##content", contentSize, false))
+        // Settings keeps a scrollbar so the long preferences sheet stays usable; every other page
+        // hides chrome scrollbars (navbar / home / player / etc.).
+        var contentFlags = currentPage == HomePage.Settings
+            ? ImGuiWindowFlags.AlwaysUseWindowPadding
+            : PaddedChild | ImGuiWindowFlags.NoScrollWithMouse;
+
+        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(24, 18)))
+        using (var content = ImRaii.Child("##content", new Vector2(centerWidth, topHeight), false, contentFlags))
         {
             if (content)
             {
-                DrawWindowControlsStrip();
                 DrawContent();
             }
         }
+
+        if (showRightRail)
+        {
+            ImGui.SameLine(0, 0);
+            using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
+            using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(16, 18)))
+            using (var rail = ImRaii.Child("##rightRail", new Vector2(RightRailWidth, topHeight), false, NavPaneFlags))
+            {
+                if (rail)
+                {
+                    DrawHomeRightRail();
+                }
+            }
+        }
+
+        using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
+        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(24, 14)))
+        using (var bottom = ImRaii.Child("##bottomBar", new Vector2(avail.X, BottomBarHeight), false,
+                   NavPaneFlags))
+        {
+            if (bottom)
+            {
+                DrawBottomBar();
+            }
+        }
+
+        // Overlay last — its own ImGui window so clicks aren't eaten by the content/rail children.
+        DrawWindowControlsStrip();
     }
 
     // No title bar means no native minimize/close chrome - these two replace it. Minimize collapses
     // the window down to MinimizedSize (see PreDraw) rather than just hiding content at full size,
     // so it actually reads as "tucked out of the way" instead of an empty box; close just does what
     // /achannel already does (IsOpen = false).
+    //
+    // Floated in a tiny sibling window just above the neon glow so (1) it sits outside the main
+    // chrome and (2) hit-testing works — parent InvisibleButtons under child panes never receive
+    // clicks even when painted with the foreground draw list.
+    // Chrome is outline-only (no solid fill) so it doesn't read as a double-stacked pill.
     private void DrawWindowControlsStrip()
     {
-        const float stripHeight = 36f;
-        const float buttonSize = 32f;
+        const float buttonSize = 26f;
         const float gap = 8f;
+        const float pad = 2f;
+        const float glowClearance = 20f;
 
-        var stripStart = ImGui.GetCursorScreenPos();
-        var fullWidth = ImGui.GetContentRegionAvail().X;
+        var mainPos = ImGui.GetWindowPos();
+        var mainSize = ImGui.GetWindowSize();
+        var stripW = pad * 2 + buttonSize * 2 + gap;
+        var stripH = pad * 2 + buttonSize;
+        var stripPos = new Vector2(
+            mainPos.X + mainSize.X - stripW - 10f,
+            mainPos.Y - stripH - glowClearance);
 
-        var closeOrigin = stripStart + new Vector2(fullWidth - buttonSize, (stripHeight - buttonSize) / 2f);
-        if (DrawWindowControlButton("##windowClose", closeOrigin, buttonSize, FontAwesomeIcon.Times, Danger))
+        ImGui.SetNextWindowPos(stripPos, ImGuiCond.Always);
+        ImGui.SetNextWindowSize(new Vector2(stripW, stripH), ImGuiCond.Always);
+
+        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(pad, pad))
+                   .Push(ImGuiStyleVar.ItemSpacing, new Vector2(gap, 0f)))
         {
-            CloseUi();
-        }
+            const ImGuiWindowFlags flags =
+                ImGuiWindowFlags.NoTitleBar
+                | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove
+                | ImGuiWindowFlags.NoScrollbar
+                | ImGuiWindowFlags.NoCollapse
+                | ImGuiWindowFlags.NoSavedSettings
+                | ImGuiWindowFlags.NoFocusOnAppearing
+                | ImGuiWindowFlags.NoNav
+                | ImGuiWindowFlags.NoDocking
+                | ImGuiWindowFlags.NoBackground;
 
-        var minimizeOrigin = closeOrigin - new Vector2(buttonSize + gap, 0);
-        if (DrawWindowControlButton("##windowMinimize", minimizeOrigin, buttonSize, FontAwesomeIcon.WindowMinimize, MutedText))
-        {
-            SetMinimized(true);
-        }
+            if (!ImGui.Begin("##alphaWindowControls", flags))
+            {
+                ImGui.End();
+                return;
+            }
 
-        // Actually consumes the vertical space (rather than just visually occupying it), so
-        // whatever child opens next genuinely starts below this strip instead of overlapping it.
-        ImGui.SetCursorScreenPos(stripStart);
-        ImGui.Dummy(new Vector2(fullWidth, stripHeight));
+            if (DrawWindowControlButton("##ctlMin", FontAwesomeIcon.WindowMinimize, buttonSize))
+            {
+                SetMinimized(true);
+            }
+
+            ImGui.SameLine(0, gap);
+            if (DrawWindowControlButton("##ctlClose", FontAwesomeIcon.Times, buttonSize))
+            {
+                CloseUi();
+            }
+
+            ImGui.End();
+        }
     }
 
-    private static bool DrawWindowControlButton(string id, Vector2 origin, float size, FontAwesomeIcon icon, Vector4 hoverColor)
+    // Invisible hit target + theme-glow outline (Accent / MagentaGlow from the picked theme).
+    private static bool DrawWindowControlButton(string id, FontAwesomeIcon icon, float size)
     {
-        ImGui.SetCursorScreenPos(origin);
+        var origin = ImGui.GetCursorScreenPos();
         ImGui.PushID(id);
-        var clicked = ImGui.InvisibleButton("##ctl", new Vector2(size, size));
+        var clicked = ImGui.InvisibleButton("##hit", new Vector2(size, size));
         var hovered = ImGui.IsItemHovered();
-        var drawList = ImGui.GetWindowDrawList();
+        ImGui.PopID();
 
-        drawList.AddRectFilled(origin, origin + new Vector2(size, size),
-            ImGui.GetColorU32(hovered ? CardBgHover : new Vector4(1f, 1f, 1f, 0.04f)), 10f);
+        var drawList = ImGui.GetWindowDrawList();
+        // Idle: soft MagentaGlow (same family as the outer halo). Hover: Accent rim strength.
+        var outline = hovered
+            ? new Vector4(Accent.X, Accent.Y, Accent.Z, 0.95f)
+            : new Vector4(MagentaGlow.X, MagentaGlow.Y, MagentaGlow.Z, 0.55f);
+        drawList.AddRect(origin, origin + new Vector2(size, size), ImGui.GetColorU32(outline), 8f,
+            ImDrawFlags.None, hovered ? 1.6f : 1.25f);
 
         using (ImRaii.PushFont(UiBuilder.IconFont))
         {
-            var text = icon.ToIconString();
-            var textSize = ImGui.CalcTextSize(text);
-            drawList.AddText(UiBuilder.IconFont, ImGui.GetFontSize() * 0.85f,
-                origin + new Vector2(size, size) / 2f - textSize * 0.425f,
-                ImGui.GetColorU32(hovered ? hoverColor : MutedText), text);
+            var glyph = icon.ToIconString();
+            var textSize = ImGui.CalcTextSize(glyph);
+            var glyphColor = hovered
+                ? AccentHover
+                : new Vector4(Accent.X, Accent.Y, Accent.Z, 0.70f);
+            drawList.AddText(origin + new Vector2(size, size) / 2f - textSize / 2f,
+                ImGui.GetColorU32(glyphColor), glyph);
         }
 
-        ImGui.PopID();
         return clicked;
     }
 
@@ -423,24 +611,15 @@ internal sealed partial class MainWindow : Window, IDisposable
         var drawList = ImGui.GetWindowDrawList();
         var rounding = size.Y * 0.5f;
 
-        // Soft drop + capsule body + hairline accent edge.
-        drawList.AddRectFilled(
-            origin + new Vector2(0f, 1.5f),
-            origin + size + new Vector2(0f, 1.5f),
-            ImGui.GetColorU32(new Vector4(0f, 0f, 0f, 0.4f)),
-            rounding);
+        // Body only on the window list (clipped). Glow/rim go through DrawGlowBorder on the
+        // foreground list so the halo isn't cut off into a hard red stroke.
         drawList.AddRectFilled(
             origin,
             origin + size,
             ImGui.GetColorU32(new Vector4(SidebarBg.X, SidebarBg.Y, SidebarBg.Z, 0.96f)),
             rounding);
-        drawList.AddRect(
-            origin,
-            origin + size,
-            ImGui.GetColorU32(new Vector4(Accent.X, Accent.Y, Accent.Z, 0.42f)),
-            rounding,
-            ImDrawFlags.None,
-            1.15f);
+
+        DrawGlowBorder(rounding);
 
         // Accent orb instead of the chunky TV tile.
         var orbCenter = origin + new Vector2(18f, size.Y * 0.5f);
@@ -450,7 +629,14 @@ internal sealed partial class MainWindow : Window, IDisposable
             ImGui.GetColorU32(new Vector4(Accent.X, Accent.Y, Accent.Z, 0.22f)));
         drawList.AddCircleFilled(orbCenter, 4.5f, ImGui.GetColorU32(Accent));
 
-        const string label = "AlphaChannel";
+        var label = viewerMode && joinedHostDisplayName is { Length: > 0 } host
+            ? $"Watching {host}"
+            : "AlphaChannel";
+        if (label.Length > 28)
+        {
+            label = label[..25] + "…";
+        }
+
         var labelSize = ImGui.CalcTextSize(label);
         drawList.AddText(
             origin + new Vector2(32f, (size.Y - labelSize.Y) * 0.5f),
@@ -517,177 +703,168 @@ internal sealed partial class MainWindow : Window, IDisposable
 
     private void DrawContent()
     {
+        // Still parked from launch cut — bounce home if somehow selected.
+        if (currentPage is HomePage.WatchAlong or HomePage.Activity
+            or HomePage.Venues or HomePage.GoLive)
+        {
+            currentPage = HomePage.Home;
+        }
+
         switch (currentPage)
         {
             case HomePage.Home:
                 DrawHome();
                 break;
             case HomePage.Player:
-                PageTitle("Player", "Put a video on your screen.");
-                DrawPlayback();
-                ImGui.Spacing();
-                SectionHeader("Find a video");
-                DrawSearch();
-                ImGui.Spacing();
-                SectionHeader("Queue");
-                DrawQueue();
+                PageTitle("Player", "Play something, then watch together.");
+                DrawPlayerPage();
                 break;
             case HomePage.Screen:
-                PageTitle("Screen", "Move and resize the picture in the world.");
+                PageTitle("Screen", "Place the picture in the world.");
                 DrawScreenControls();
                 break;
-            case HomePage.WatchAlong:
-                PageTitle("Watch-along", "Watch the same thing with friends.");
-                DrawWatchAlong();
-                ImGui.Spacing();
-                DrawReactions();
-                break;
             case HomePage.Friends:
-                PageTitle("Friends", "Your people — online status and invites.");
+                PageTitle("Friends", "People you can invite and join.");
                 DrawFriends();
-                break;
-            case HomePage.Messages:
-                PageTitle("Alpha Chat", "Private messages between friends.");
-                DrawMessages();
-                break;
-            case HomePage.Activity:
-                PageTitle("Activity", "Recent things friends did.");
-                DrawActivity();
                 break;
             case HomePage.Apps:
                 PageTitle("Apps", "Extra tools that live alongside the channel.");
                 DrawApps();
                 break;
+            case HomePage.Messages:
+                PageTitleBack("Alpha Chat", "Private messages between friends.", HomePage.Apps);
+                DrawMessages();
+                break;
+            case HomePage.PluginHub:
+                PageTitleBack("Plugin Hub", "What plugins friends have enabled.", HomePage.Apps);
+                myPluginsDirty = true;
+                DrawPluginHub();
+                break;
             case HomePage.Tweeter:
                 PageTitleBack("Tweeter", "Short posts from people you follow.", HomePage.Apps);
                 DrawTweeter();
                 break;
-            case HomePage.PluginHub:
-                PageTitle("Plugin Hub", "What plugins friends have enabled.");
-                myPluginsDirty = true;
-                DrawPluginHub();
-                break;
-            case HomePage.Venues:
-                PageTitle("Venues", "Saved screen spots you can share.");
-                DrawVenues();
-                break;
-            case HomePage.GoLive:
-                PageTitle("Go Live", "Stream from OBS for friends to watch.");
-                DrawGoLive();
-                break;
             case HomePage.Settings:
-                PageTitle("Settings", "Account, look, and server.");
+                PageTitle("Settings", "Account, look, and whispers.");
                 DrawSettings();
                 break;
         }
     }
 
-    // Magenta→cyan dual-tone ring matching the mockup's neon edge. ImGui has no blur, so layered
-    // translucent rects stand in for the soft glow.
-    private void DrawGlowBorder()
+    // Soft neon halo around the window. Must use the foreground draw list — the window draw list
+    // clips to the window rect, which cuts off any outward glow and leaves a hard rim.
+    // roundingOverride: capsule uses half-height; full window uses the default 16.
+    private void DrawGlowBorder(float rounding = 16f)
     {
-        var drawList = ImGui.GetWindowDrawList();
+        var drawList = ImGui.GetForegroundDrawList();
         var min = ImGui.GetWindowPos();
         var max = min + ImGui.GetWindowSize();
 
-        for (var layer = 3; layer >= 1; layer--)
+        // Outer falloff (largest → smallest). Wider + softer so it reads as glow, not a stroke.
+        for (var layer = 7; layer >= 1; layer--)
         {
-            var inset = layer * 3f;
-            var alpha = 0.04f + (4 - layer) * 0.045f;
-            var t = layer / 3f;
+            var outset = layer * 2.25f;
+            var alpha = 0.028f + (8 - layer) * 0.018f;
+            var t = layer / 7f;
             var glow = new Vector4(
                 MagentaGlow.X + (BlueGlow.X - MagentaGlow.X) * (1f - t),
                 MagentaGlow.Y + (BlueGlow.Y - MagentaGlow.Y) * (1f - t),
                 MagentaGlow.Z + (BlueGlow.Z - MagentaGlow.Z) * (1f - t),
                 alpha);
-            drawList.AddRect(min - new Vector2(inset, inset), max + new Vector2(inset, inset),
-                ImGui.GetColorU32(glow), 14f + inset, ImDrawFlags.None, 2f);
+            drawList.AddRect(
+                min - new Vector2(outset, outset),
+                max + new Vector2(outset, outset),
+                ImGui.GetColorU32(glow),
+                rounding + outset * 0.55f,
+                ImDrawFlags.None,
+                2.2f + layer * 0.35f);
         }
 
-        drawList.AddRect(min, max, ImGui.GetColorU32(new Vector4(Accent.X, Accent.Y, Accent.Z, 0.85f)), 12f,
-            ImDrawFlags.None, 1.5f);
-        drawList.AddRect(min + new Vector2(1.5f, 1.5f), max - new Vector2(1.5f, 1.5f),
-            ImGui.GetColorU32(new Vector4(BlueGlow.X, BlueGlow.Y, BlueGlow.Z, 0.35f)), 11f,
-            ImDrawFlags.None, 1f);
+        // Accent rim sitting on the window edge.
+        drawList.AddRect(min + new Vector2(0.5f, 0.5f), max - new Vector2(0.5f, 0.5f),
+            ImGui.GetColorU32(new Vector4(Accent.X, Accent.Y, Accent.Z, 0.95f)), rounding,
+            ImDrawFlags.None, 1.6f);
+
+        // Cool inner hairline for depth (skip on tiny capsules — reads as a double stroke).
+        if (rounding < max.Y * 0.45f)
+        {
+            drawList.AddRect(min + new Vector2(2.5f, 2.5f), max - new Vector2(2.5f, 2.5f),
+                ImGui.GetColorU32(new Vector4(BlueGlow.X, BlueGlow.Y, BlueGlow.Z, 0.28f)),
+                MathF.Max(4f, rounding - 2f), ImDrawFlags.None, 1f);
+        }
     }
 
     private void DrawSidebar()
     {
-        // Brand block matching mockup: TV mark + wordmark + tagline.
-        using (ImRaii.PushFont(UiBuilder.IconFont))
-        {
-            ImGui.TextColored(Accent, FontAwesomeIcon.Tv.ToIconString());
-        }
+        // Compact brand: accent mark + wordmark (tagline lives on Home).
+        var brandOrigin = ImGui.GetCursorScreenPos();
+        var drawList = ImGui.GetWindowDrawList();
+        const float mark = 28f;
+        drawList.AddRectFilled(brandOrigin, brandOrigin + new Vector2(mark, mark),
+            ImGui.GetColorU32(new Vector4(Accent.X, Accent.Y, Accent.Z, 0.22f)), 8f);
+        drawList.AddText(brandOrigin + new Vector2(8, 5), ImGui.GetColorU32(Accent), "A");
+        ImGui.Dummy(new Vector2(mark, mark));
+        ImGui.SameLine(0, 10);
+        ImGui.BeginGroup();
+        ImGui.Dummy(new Vector2(0, 4));
+        ImGui.TextUnformatted("ALPHA CHANNEL");
+        ImGui.EndGroup();
 
-        ImGui.SameLine();
-        ImGui.TextUnformatted("Alpha Channel");
-        ImGui.TextColored(MutedText, "Cast. Watch. Together.");
-
-        ImGui.Spacing();
-        ImGui.Dummy(new Vector2(0, 2));
-        var hair = ImGui.GetCursorScreenPos();
-        ImGui.GetWindowDrawList().AddRectFilled(hair, hair + new Vector2(ImGui.GetContentRegionAvail().X, 1f),
-            ImGui.GetColorU32(BorderSubtle));
-        ImGui.Dummy(new Vector2(0, 10));
+        ImGui.Dummy(new Vector2(0, 14));
 
         if (CurrentSession is { } sidebarSession && friendsDirty && !friendsLoading)
         {
             RefreshFriends(sidebarSession.Token);
         }
 
-        if (CurrentSession is { } pluginSyncSession && lastPluginSyncToken != pluginSyncSession.Token)
-        {
-            lastPluginSyncToken = pluginSyncSession.Token;
-            SyncMyPlugins(pluginSyncSession.Token);
-        }
+        DrawNavItem(HomePage.Home, FontAwesomeIcon.Home, "Home");
+        DrawNavItem(HomePage.Player, FontAwesomeIcon.Play, "Player");
+        DrawNavItem(HomePage.Screen, FontAwesomeIcon.Desktop, "Screen");
+        DrawNavItem(HomePage.Friends, FontAwesomeIcon.UserFriends, "Friends", friendRequests.Incoming.Length);
+        var appsActive = currentPage is HomePage.Apps or HomePage.Messages or HomePage.PluginHub
+            or HomePage.Tweeter;
+        var appsBadge = conversations.Sum(c => c.UnreadCount) + unreadWhisperKeys.Count;
+        DrawNavItem(HomePage.Apps, FontAwesomeIcon.ThLarge, "Apps", appsBadge, forceActive: appsActive);
+        DrawNavItem(HomePage.Settings, FontAwesomeIcon.Cog, "Settings");
 
-        if (CurrentSession is { } dmSidebarSession && conversationsDirty && !conversationsLoading)
+        if (CurrentSession is { } dmSidebarSession
+            && currentPage is HomePage.Messages or HomePage.Apps
+            && conversationsDirty && !conversationsLoading)
         {
             RefreshConversations(dmSidebarSession.Token);
         }
 
-        if (CurrentSession is { } activitySidebarSession && activityUnreadDirty)
+        // Footer pinned above the content-region bottom. Theme ItemSpacing was eating the
+        // version line (Dummy gap + spacing pushed it under the clip), so zero it here and
+        // keep a little explicit slack under the version.
+        // Rotate the ask ↔ "Donate on Ko-fi" every 30s; height fits the taller copy so the
+        // footer doesn't jump when the label flips.
+        var donateLabel = DonateLabels[((int)(ImGui.GetTime() / DonateRotateSeconds)) % DonateLabels.Length];
+        var footerWidth = MathF.Max(40f, ImGui.GetContentRegionAvail().X);
+        var wrapWidth = MathF.Max(40f, footerWidth - 16f);
+        var donateH = 40f;
+        foreach (var candidate in DonateLabels)
         {
-            activityUnreadDirty = false;
-            var token = activitySidebarSession.Token;
-            _ = Task.Run(async () => activityUnreadCount = await activityClient.GetUnreadCountAsync(token));
+            donateH = MathF.Max(donateH, ImGui.CalcTextSize(candidate, false, wrapWidth).Y + 14f);
         }
 
-        DrawNavGroup("WATCH");
-        DrawNavItem(HomePage.Home, FontAwesomeIcon.Home, "Home");
-        DrawNavItem(HomePage.Player, FontAwesomeIcon.Play, "Player");
-        DrawNavItem(HomePage.Screen, FontAwesomeIcon.Desktop, "Screen");
-        DrawNavItem(HomePage.WatchAlong, FontAwesomeIcon.Users, "Watch-along");
+        const float footerGap = 8f;
+        const float bottomSlack = 10f;
+        var versionH = ImGui.GetTextLineHeightWithSpacing();
+        var footerH = donateH + footerGap + versionH + bottomSlack;
 
-        DrawNavGroup("SOCIAL");
-        DrawNavItem(HomePage.Friends, FontAwesomeIcon.UserFriends, "Friends", friendRequests.Incoming.Length);
-        DrawNavItem(HomePage.Messages, FontAwesomeIcon.Comment, "Alpha Chat", conversations.Sum(c => c.UnreadCount) + unreadWhisperKeys.Count);
-        DrawNavItem(HomePage.Activity, FontAwesomeIcon.Bell, "Activity", activityUnreadCount);
-
-        DrawNavGroup("MORE");
-        var appsActive = currentPage is HomePage.Apps or HomePage.Tweeter;
-        DrawNavItem(HomePage.Apps, FontAwesomeIcon.ThLarge, "Apps", forceActive: appsActive);
-        DrawNavItem(HomePage.PluginHub, FontAwesomeIcon.PuzzlePiece, "Plugin Hub");
-        DrawNavItem(HomePage.Venues, FontAwesomeIcon.MapMarkerAlt, "Venues");
-        DrawNavItem(HomePage.GoLive, FontAwesomeIcon.SatelliteDish, "Go Live");
-        DrawNavItem(HomePage.Settings, FontAwesomeIcon.Cog, "Settings");
-
-        var bottomBlockHeight = 100f;
-        var targetY = ImGui.GetWindowHeight() - bottomBlockHeight;
-        if (targetY > ImGui.GetCursorPosY())
+        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
         {
-            ImGui.SetCursorPosY(targetY);
-        }
+            var footerStartY = ImGui.GetWindowContentRegionMax().Y - footerH;
+            if (footerStartY > ImGui.GetCursorPosY())
+            {
+                ImGui.SetCursorPosY(footerStartY);
+            }
 
-        var footHair = ImGui.GetCursorScreenPos();
-        ImGui.GetWindowDrawList().AddRectFilled(footHair, footHair + new Vector2(ImGui.GetContentRegionAvail().X, 1f),
-            ImGui.GetColorU32(BorderSubtle));
-        ImGui.Dummy(new Vector2(0, 10));
-        DrawWatchingStat();
-        ImGui.Spacing();
-        DrawDonateLink();
-        ImGui.Spacing();
-        DrawVersionFooter();
+            DrawDonateLink(donateLabel, donateH);
+            ImGui.Dummy(new Vector2(0, footerGap));
+            DrawVersionFooter();
+        }
     }
 
     private static void DrawNavGroup(string label)
@@ -697,9 +874,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         ImGui.Dummy(new Vector2(0, 2));
     }
 
-    // Proven click-region technique from origin/master: InvisibleButton + draw-list icon/label.
-    // Active row = rounded purple pill matching the mockup Home highlight.
-    // forceActive keeps Apps highlighted while you're inside Tweeter.
+    // forceActive keeps Apps highlighted while you're inside an app (Chat / Hub / Tweeter).
     private void DrawNavItem(HomePage page, FontAwesomeIcon icon, string label, int badgeCount = 0,
         bool forceActive = false)
     {
@@ -742,7 +917,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         if (clicked)
         {
             currentPage = page;
-            if (page == HomePage.Messages)
+            if (page == HomePage.Apps)
             {
                 conversationsDirty = true;
             }
@@ -763,7 +938,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         {
             ImGui.TextUnformatted($"{stream.Roster.Length}");
             ImGui.SameLine();
-            ImGui.TextColored(MutedText, "watching now");
+            ImGui.TextColored(MutedText, "in party");
         }
         else
         {
@@ -772,7 +947,6 @@ internal sealed partial class MainWindow : Window, IDisposable
             ImGui.TextColored(MutedText, onlineFriends == 1 ? "friend online" : "friends online");
         }
 
-        // Global connected clients, pinned to the right of the friends/watching line.
         if (usersOnlineCount > 0 || stream.IsConnected)
         {
             var label = usersOnlineCount == 1 ? "1 user" : $"{usersOnlineCount} users";
@@ -784,19 +958,29 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
     }
 
-    // Ko-fi brand pink on a solid fill so the label stays readable against every UiTheme.
+    // Ko-fi brand pink — left-nav footer above the version. Alternates ask ↔ CTA every 30s.
     private static readonly Vector4 KofiPink = new(0.98f, 0.29f, 0.55f, 1f);
     private static readonly Vector4 KofiPinkHover = new(1f, 0.40f, 0.62f, 1f);
     private static readonly Vector4 KofiPinkActive = new(0.85f, 0.20f, 0.45f, 1f);
+    private static readonly string[] DonateLabels =
+    [
+        "Hey, like what you see?\nConsider supporting us",
+        "Donate on Ko-fi",
+    ];
+    private const double DonateRotateSeconds = 30;
 
-    private void DrawDonateLink()
+    private void DrawDonateLink(string label, float height)
     {
+        var width = ImGui.GetContentRegionAvail().X;
+        var origin = ImGui.GetCursorScreenPos();
+        var size = new Vector2(width, height);
+
         using (ImRaii.PushColor(ImGuiCol.Button, KofiPink)
                    .Push(ImGuiCol.ButtonHovered, KofiPinkHover)
                    .Push(ImGuiCol.ButtonActive, KofiPinkActive)
                    .Push(ImGuiCol.Text, Vector4.One))
         {
-            if (ImGui.Button("Donate on Ko-fi", new Vector2(-1, 30)))
+            if (ImGui.Button("##kofiDonate", size))
             {
                 try
                 {
@@ -808,6 +992,18 @@ internal sealed partial class MainWindow : Window, IDisposable
                 }
             }
         }
+
+        // Centered wrapped copy on top of the solid pink hit target (Button labels don't wrap).
+        var wrapWidth = MathF.Max(40f, width - 16f);
+        var textSize = ImGui.CalcTextSize(label, false, wrapWidth);
+        var textPos = origin + new Vector2((width - textSize.X) * 0.5f, (height - textSize.Y) * 0.5f);
+        ImGui.GetWindowDrawList().AddText(
+            ImGui.GetFont(),
+            ImGui.GetFontSize(),
+            textPos,
+            ImGui.GetColorU32(Vector4.One),
+            label,
+            wrapWidth);
     }
 
     private static string? cachedVersionText;
@@ -815,7 +1011,11 @@ internal sealed partial class MainWindow : Window, IDisposable
     private static void DrawVersionFooter()
     {
         cachedVersionText ??= typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "dev";
-        ImGui.TextColored(MutedText, $"AlphaChannel v{cachedVersionText}");
+        var text = $"AlphaChannel v{cachedVersionText}";
+        var textWidth = ImGui.CalcTextSize(text).X;
+        var avail = ImGui.GetContentRegionAvail().X;
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + MathF.Max(0f, (avail - textWidth) * 0.5f));
+        ImGui.TextColored(MutedText, text);
     }
 
     // Every non-Home page starts with back + title + a one-line purpose so each Channel reads as
@@ -851,12 +1051,12 @@ internal sealed partial class MainWindow : Window, IDisposable
         ImGui.TextColored(MutedText, purpose);
         ImGui.EndGroup();
 
-        ImGui.Dummy(new Vector2(0, 6));
+        ImGui.Dummy(new Vector2(0, 8));
         var origin = ImGui.GetCursorScreenPos();
         var width = ImGui.GetContentRegionAvail().X;
         ImGui.GetWindowDrawList().AddRectFilled(origin, origin + new Vector2(width, 1f),
             ImGui.GetColorU32(BorderSubtle));
-        ImGui.Dummy(new Vector2(width, 14f));
+        ImGui.Dummy(new Vector2(width, 18f));
     }
 
     // Consistent accent-colored sub-headers within a page — same weight on every Channel.
@@ -872,7 +1072,8 @@ internal sealed partial class MainWindow : Window, IDisposable
     {
         using (ImRaii.PushColor(ImGuiCol.ChildBg, CardBg))
         using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(16, 14)))
-        using (var card = ImRaii.Child(id, new Vector2(-1, 1), false, ImGuiWindowFlags.AlwaysAutoResize))
+        using (var card = ImRaii.Child(id, new Vector2(-1, 1), false,
+                   PaddedChild | ImGuiWindowFlags.AlwaysAutoResize))
         {
             if (card)
             {
@@ -887,10 +1088,11 @@ internal sealed partial class MainWindow : Window, IDisposable
     private static void DrawStage(string id, Action draw)
     {
         var origin = ImGui.GetCursorScreenPos();
-        using (ImRaii.PushColor(ImGuiCol.ChildBg, new Vector4(CardBg.X, CardBg.Y, CardBg.Z, MathF.Min(CardBg.W + 0.08f, 1f))))
+        using (ImRaii.PushColor(ImGuiCol.ChildBg, CardBgHover))
         using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(20, 18)))
         using (ImRaii.PushStyle(ImGuiStyleVar.ChildRounding, 14f))
-        using (var stage = ImRaii.Child(id, new Vector2(-1, 1), false, ImGuiWindowFlags.AlwaysAutoResize))
+        using (var stage = ImRaii.Child(id, new Vector2(-1, 1), false,
+                   PaddedChild | ImGuiWindowFlags.AlwaysAutoResize))
         {
             if (stage)
             {
@@ -990,115 +1192,6 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void DrawWatchAlong()
-    {
-        if (CurrentSession is null)
-        {
-            DrawPlainEmpty("Host or join a synced room after you sign in.", "Open Settings",
-                () => currentPage = HomePage.Settings);
-            return;
-        }
-
-        switch (stream.Mode)
-        {
-            case StreamMode.Hosting:
-                DrawStage("##watchHosting", () =>
-                {
-                    ImGui.TextColored(Good, "HOSTING");
-                    ImGui.SetWindowFontScale(1.2f);
-                    ImGui.TextUnformatted($"{CurrentDisplayName ?? "Your"} room");
-                    ImGui.SetWindowFontScale(1f);
-                    ImGui.TextColored(MutedText, $"{stream.Roster.Length} watching · playback stays locked to you");
-                    ImGui.Spacing();
-
-                    var isPrivate = stream.IsPrivate;
-                    if (ImGui.Checkbox("Private (hide from friends' presence)", ref isPrivate))
-                    {
-                        stream.IsPrivate = isPrivate;
-                    }
-
-                    if (ImGui.Button("Copy party invite", new Vector2(-1, 32)))
-                    {
-                        ImGui.SetClipboardText(
-                            $"Come watch with me! Right-click my character and choose \"Join Stream\" " +
-                            $"(or open AlphaChannel and join \"{CurrentDisplayName}\").");
-                    }
-                });
-                DrawRoster($"Watching ({stream.Roster.Length})", allowPromote: true);
-                break;
-
-            case StreamMode.Viewing:
-                DrawStage("##watchViewing", () =>
-                {
-                    ImGui.TextColored(Good, "IN ROOM");
-                    ImGui.SetWindowFontScale(1.2f);
-                    ImGui.TextUnformatted(joinedHostDisplayName is { } host ? $"{host}'s room" : "A friend's room");
-                    ImGui.SetWindowFontScale(1f);
-                    ImGui.TextColored(MutedText, $"{stream.Roster.Length} also here");
-                    ImGui.Spacing();
-                    if (ImGui.Button("Leave room", new Vector2(-1, 32)))
-                    {
-                        _ = stream.LeaveAsync();
-                    }
-                });
-                DrawRoster($"Also here ({stream.Roster.Length})", allowPromote: false);
-                break;
-
-            default:
-                DrawStage("##watchIdle", () =>
-                {
-                    var hasMedia = queue.Current is not null;
-                    ImGui.TextColored(MutedText, "HOW IT WORKS");
-                    ImGui.Spacing();
-                    ImGui.BulletText("You play a video in Player (hosting starts automatically).");
-                    ImGui.BulletText("Friends join with your AlphaChannel name.");
-                    ImGui.BulletText("Everyone stays in sync — pause, seek, and the screen.");
-                    ImGui.Spacing();
-
-                    if (hasMedia)
-                    {
-                        ImGui.TextColored(Good, "You're playing something — friends can join you now.");
-                        ImGui.Spacing();
-                        if (ImGui.Button("Copy invite text", new Vector2(-1, 34)))
-                        {
-                            ImGui.SetClipboardText(
-                                $"Come watch with me! Right-click my character and choose \"Join Stream\" " +
-                                $"(or open AlphaChannel and join \"{CurrentDisplayName}\").");
-                        }
-                    }
-                    else
-                    {
-                        using (ImRaii.PushColor(ImGuiCol.Button, Gold)
-                                   .Push(ImGuiCol.ButtonHovered, GoldHover)
-                                   .Push(ImGuiCol.ButtonActive, Gold)
-                                   .Push(ImGuiCol.Text, new Vector4(0.12f, 0.09f, 0.02f, 1f)))
-                        {
-                            if (ImGui.Button("1. Open Player and pick a video", new Vector2(-1, 34)))
-                            {
-                                currentPage = HomePage.Player;
-                            }
-                        }
-                    }
-
-                    ImGui.Spacing();
-                    ImGui.TextUnformatted(hasMedia ? "Or join someone else" : "2. Or join a friend");
-                    ImGui.SetNextItemWidth(-100f);
-                    ImGui.InputTextWithHint("##hostName", "Their name", ref joinHostNameInput, 32);
-                    ImGui.SameLine();
-                    if (ImGui.Button("Join", new Vector2(88, 0)))
-                    {
-                        DoJoin(joinHostNameInput);
-                    }
-
-                    if (joinError is { } error)
-                    {
-                        ImGui.TextColored(Danger, error);
-                    }
-                });
-                break;
-        }
-    }
-
     private void DrawRoster(string label, bool allowPromote)
     {
         ImGui.TextUnformatted(label);
@@ -1137,6 +1230,10 @@ internal sealed partial class MainWindow : Window, IDisposable
     {
         PersistPositions();
         thumbnails.Dispose();
+        homeHero?.Dispose();
+        homeHero = null;
+        customBackground?.Dispose();
+        customBackground = null;
     }
 
     // Shared by every partial that wants a play/pause/skip/volume-style glyph button instead of a
@@ -1150,7 +1247,7 @@ internal sealed partial class MainWindow : Window, IDisposable
     private readonly struct ThemeScope : IDisposable
     {
         private const int ColorCount = 10;
-        private const int StyleCount = 4;
+        private const int StyleCount = 7;
 
         public ThemeScope()
         {
@@ -1168,6 +1265,9 @@ internal sealed partial class MainWindow : Window, IDisposable
             ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, 12f);
             ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 16f);
             ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 16f);
+            ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(12, 10));
+            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(12, 8));
+            ImGui.PushStyleVar(ImGuiStyleVar.ItemInnerSpacing, new Vector2(8, 6));
         }
 
         public void Dispose()

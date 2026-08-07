@@ -4,11 +4,11 @@ public sealed record AccountSummaryDto(string Id, string Handle, string DisplayN
 
 // Online/WatchingLabel are computed live from server-side connection/room state, not stored -
 // WatchingLabel stays null until PresenceService fills it in (see task 6). AvatarIcon/AvatarColorHex/
-// StatusMessage are included inline (not just on the dedicated profile endpoint) so the friends list
-// itself can render an avatar chip and status without an extra round-trip per friend.
+// AvatarImageUrl/StatusMessage are included inline (not just on the dedicated profile endpoint) so
+// the friends list itself can render an avatar chip and status without an extra round-trip per friend.
 public sealed record FriendDto(
     string AccountId, string Handle, string DisplayName, bool Online, string? WatchingLabel,
-    string? AvatarIcon, string AvatarColorHex, string? StatusMessage);
+    string? AvatarIcon, string AvatarColorHex, string? StatusMessage, string? AvatarImageUrl);
 
 public sealed record FriendRequestDto(string Id, string OtherAccountId, string OtherHandle, string OtherDisplayName, long CreatedAtUnix);
 
@@ -37,4 +37,5 @@ public enum FriendSearchRelation
 // SearchByDisplayNamePrefixAsync. Relation lets the client gray out/relabel a row instead of
 // blindly offering "Add" on someone already pending or already a friend.
 public sealed record FriendSearchResultDto(
-    string AccountId, string DisplayName, string? AvatarIcon, string AvatarColorHex, FriendSearchRelation Relation);
+    string AccountId, string DisplayName, string? AvatarIcon, string AvatarColorHex, FriendSearchRelation Relation,
+    string? AvatarImageUrl);

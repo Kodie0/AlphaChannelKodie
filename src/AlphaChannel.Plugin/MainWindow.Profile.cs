@@ -61,7 +61,7 @@ internal sealed partial class MainWindow
         else
         {
             var profile = profilePopupData;
-            DrawAvatarChip(profile.AvatarIcon, profile.AvatarColorHex, 56);
+            DrawAvatarChip(profile.AvatarIcon, profile.AvatarColorHex, 56, profile.AvatarImageUrl);
             ImGui.SameLine();
             ImGui.BeginGroup();
             ImGui.Text(profile.DisplayName);

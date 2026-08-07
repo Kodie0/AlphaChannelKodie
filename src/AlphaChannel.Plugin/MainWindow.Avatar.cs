@@ -7,9 +7,9 @@ using Dalamud.Interface.Utility.Raii;
 namespace AlphaChannel.Plugin;
 
 // Avatar rendering + the curated icon/color picker - shared by Settings' profile editor and every
-// place an avatar chip shows up (Friends list, Alpha Chat, Tweeter, the profile popup). Deliberately
-// a closed set of FontAwesomeIcon glyphs + a small color palette, not free text or an uploaded
-// image - see Account.AvatarIcon's server-side doc comment for why.
+// place an avatar chip shows up (Friends list, Alpha Chat, Tweeter, the profile popup). Custom
+// uploaded pictures (AvatarImageUrl) take priority when the texture is loaded; icon+color is the
+// fallback while loading or when no picture is set.
 internal sealed partial class MainWindow
 {
     private static readonly string[] AvatarIcons =
@@ -38,16 +38,48 @@ internal sealed partial class MainWindow
         return new Vector4(((value >> 16) & 0xFF) / 255f, ((value >> 8) & 0xFF) / 255f, (value & 0xFF) / 255f, 1f);
     }
 
-    // Draws a filled circle + centered glyph at the current cursor position via the draw list (not
-    // child-window layout), then reserves layout space with Dummy so SameLine/etc. after this call
-    // behave normally - same "capture position, draw via draw list, Dummy to reserve" idiom as
-    // DrawGlowBorder's simpler cousin.
-    private static void DrawAvatarChip(string? iconName, string colorHex, float diameter)
+    private string? ResolveAvatarUrl(string? relativeOrAbsolute)
+    {
+        if (string.IsNullOrWhiteSpace(relativeOrAbsolute))
+        {
+            return null;
+        }
+
+        if (relativeOrAbsolute.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            relativeOrAbsolute.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return relativeOrAbsolute;
+        }
+
+        var baseUrl = Plugin.Cfg.RelayServerUrl.TrimEnd('/');
+        return relativeOrAbsolute.StartsWith('/')
+            ? baseUrl + relativeOrAbsolute
+            : $"{baseUrl}/{relativeOrAbsolute}";
+    }
+
+    // Draws a filled circle (+ optional custom image) at the current cursor, then reserves layout
+    // space with Dummy. Custom pictures load through ThumbnailCache (same as video thumbs).
+    private void DrawAvatarChip(string? iconName, string colorHex, float diameter, string? imageUrl = null)
     {
         var topLeft = ImGui.GetCursorScreenPos();
         var drawList = ImGui.GetWindowDrawList();
-        var center = topLeft + new Vector2(diameter / 2, diameter / 2);
-        drawList.AddCircleFilled(center, diameter / 2, ImGui.GetColorU32(ParseAvatarColor(colorHex)));
+        var size = new Vector2(diameter, diameter);
+        var center = topLeft + size / 2f;
+        var radius = diameter / 2f;
+
+        var absoluteUrl = ResolveAvatarUrl(imageUrl);
+        var texture = absoluteUrl is null ? null : thumbnails.Get(absoluteUrl);
+        if (texture is not null)
+        {
+            var (uv0, uv1) = CoverUvs(texture.Width, texture.Height, diameter, diameter);
+            drawList.AddImageRounded(texture.Handle, topLeft, topLeft + size, uv0, uv1,
+                ImGui.GetColorU32(Vector4.One), radius);
+            drawList.AddCircle(center, radius, ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.12f)), 0, 1.25f);
+            ImGui.Dummy(size);
+            return;
+        }
+
+        drawList.AddCircleFilled(center, radius, ImGui.GetColorU32(ParseAvatarColor(colorHex)));
 
         if (iconName is { Length: > 0 } && Enum.TryParse<FontAwesomeIcon>(iconName, out var icon))
         {
@@ -59,7 +91,7 @@ internal sealed partial class MainWindow
             }
         }
 
-        ImGui.Dummy(new Vector2(diameter, diameter));
+        ImGui.Dummy(size);
     }
 
     // Wraps into rows of 9 rather than relying on ImGui's automatic wrapping (which needs per-item

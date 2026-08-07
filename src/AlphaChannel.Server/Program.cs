@@ -39,6 +39,7 @@ builder.Services.AddSingleton<XivAuthFlowStore>();
 builder.Services.AddSingleton(new DiscordNotifier(new HttpClient(), builder.Configuration["DISCORD_LALAFELL_WEBHOOK_URL"]));
 builder.Services.AddHttpClient<LodestoneRaceChecker>();
 builder.Services.AddScoped<AccountService>();
+builder.Services.AddSingleton<AvatarStorage>();
 builder.Services.AddScoped<AccountAuthFilter>();
 builder.Services.AddScoped<FriendService>();
 builder.Services.AddSingleton<ActivityService>();

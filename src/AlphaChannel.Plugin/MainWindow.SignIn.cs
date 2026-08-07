@@ -1,6 +1,7 @@
 using AlphaChannel.Contracts;
 using AlphaChannel.Plugin.Auth;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 
 namespace AlphaChannel.Plugin;
@@ -45,6 +46,10 @@ internal sealed partial class MainWindow
     private string? lastProfileSyncedFor;
     private string? profileIconInput;
     private string profileColorInput = "#9966FA";
+    private string? profileImageUrl;
+    private string profileAvatarPathInput = string.Empty;
+    private string? profileAvatarError;
+    private bool profileAvatarBusy;
     private string profileBioInput = string.Empty;
     private string profileStatusInput = string.Empty;
     private bool profileSaving;
@@ -140,6 +145,11 @@ internal sealed partial class MainWindow
                         if (summary is not null)
                         {
                             session.InviteCode = summary.InviteCode;
+                            session.AvatarIcon = summary.AvatarIcon;
+                            session.AvatarColorHex = summary.AvatarColorHex;
+                            session.AvatarImageUrl = summary.AvatarImageUrl;
+                            session.Bio = summary.Bio;
+                            session.StatusMessage = summary.StatusMessage;
                             onSessionChanged(session);
                         }
                     });
@@ -215,15 +225,69 @@ internal sealed partial class MainWindow
         {
             profileIconInput = session.AvatarIcon;
             profileColorInput = session.AvatarColorHex;
+            profileImageUrl = session.AvatarImageUrl;
+            profileAvatarPathInput = string.Empty;
+            profileAvatarError = null;
             profileBioInput = session.Bio ?? string.Empty;
             profileStatusInput = session.StatusMessage ?? string.Empty;
             lastProfileSyncedFor = session.AccountId;
         }
 
         SectionHeader("Profile");
-        DrawAvatarChip(profileIconInput, profileColorInput, 48);
+        DrawAvatarChip(profileIconInput, profileColorInput, 56, profileImageUrl);
         ImGui.SameLine();
+        ImGui.BeginGroup();
         ImGui.TextColored(MutedText, "Shown next to your name everywhere - Friends, Alpha Chat, Tweeter.");
+        if (profileImageUrl is { Length: > 0 })
+        {
+            ImGui.TextColored(Good, "Custom picture active.");
+        }
+        else
+        {
+            ImGui.TextColored(new Vector4(MutedText.X, MutedText.Y, MutedText.Z, 0.85f),
+                "png / jpg / webp · up to 1 MB");
+        }
+
+        ImGui.EndGroup();
+
+        ImGui.Spacing();
+        ImGui.TextColored(MutedText, "Custom picture");
+        using (ImRaii.Disabled(profileAvatarBusy))
+        {
+            if (DrawProfileActionButton(FontAwesomeIcon.FolderOpen, "Downloads", "Newest image", Accent))
+            {
+                var found = FindImageInDownloads();
+                if (found is null)
+                {
+                    profileAvatarError = "No image found in Downloads.";
+                }
+                else
+                {
+                    profileAvatarPathInput = found;
+                    UploadProfileAvatar(session, found);
+                }
+            }
+
+            ImGui.SameLine(0, 8);
+            if (DrawProfileActionButton(FontAwesomeIcon.Upload, "Upload", "Paste a path", Hex(0x38BDF8)))
+            {
+                ImGui.OpenPopup("Upload picture##profileAvatarPath");
+            }
+
+            ImGui.SameLine(0, 8);
+            if (DrawProfileActionButton(FontAwesomeIcon.Trash, "Remove", "Use icon instead", Hex(0xF87171),
+                    disabled: string.IsNullOrEmpty(profileImageUrl)))
+            {
+                ClearProfileAvatar(session);
+            }
+        }
+
+        DrawProfileAvatarPathPopup(session);
+
+        if (profileAvatarError is { Length: > 0 } avatarError)
+        {
+            ImGui.TextColored(Danger, avatarError);
+        }
 
         ImGui.Spacing();
         ImGui.TextColored(MutedText, "Icon");
@@ -255,6 +319,171 @@ internal sealed partial class MainWindow
         }
     }
 
+    // Same tile language as theme / background swatches — icon disc + title + muted subtitle.
+    private static bool DrawProfileActionButton(FontAwesomeIcon icon, string title, string subtitle,
+        Vector4 color, bool disabled = false)
+    {
+        var size = new Vector2(128, 44);
+        var origin = ImGui.GetCursorScreenPos();
+        var drawList = ImGui.GetWindowDrawList();
+
+        ImGui.PushID(title);
+        var clicked = false;
+        using (ImRaii.Disabled(disabled))
+        {
+            clicked = ImGui.InvisibleButton("##profileAction", size);
+        }
+
+        var hovered = ImGui.IsItemHovered();
+        ImGui.PopID();
+
+        var fill = disabled
+            ? new Vector4(CardBg.X, CardBg.Y, CardBg.Z, CardBg.W * 0.55f)
+            : hovered ? CardBgHover : CardBg;
+        drawList.AddRectFilled(origin, origin + size, ImGui.GetColorU32(fill), 10f);
+        if (hovered && !disabled)
+        {
+            drawList.AddRect(origin, origin + size,
+                ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, 0.55f)), 10f,
+                ImDrawFlags.None, 1.25f);
+        }
+
+        const float disc = 26f;
+        var discOrigin = origin + new Vector2(10, (size.Y - disc) / 2);
+        var discAlpha = disabled ? 0.10f : 0.22f;
+        drawList.AddRectFilled(discOrigin, discOrigin + new Vector2(disc, disc),
+            ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, discAlpha)), 8f);
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            var glyph = icon.ToIconString();
+            var glyphSize = ImGui.CalcTextSize(glyph);
+            drawList.AddText(discOrigin + new Vector2(disc, disc) / 2 - glyphSize / 2,
+                ImGui.GetColorU32(disabled
+                    ? new Vector4(color.X, color.Y, color.Z, 0.35f)
+                    : color), glyph);
+        }
+
+        var titleColor = disabled ? new Vector4(1f, 1f, 1f, 0.35f) : Vector4.One;
+        var subColor = disabled
+            ? new Vector4(MutedText.X, MutedText.Y, MutedText.Z, 0.35f)
+            : MutedText;
+        drawList.AddText(origin + new Vector2(44, 8), ImGui.GetColorU32(titleColor), title);
+        drawList.AddText(origin + new Vector2(44, 24), ImGui.GetColorU32(subColor), subtitle);
+
+        return clicked && !disabled;
+    }
+
+    private void DrawProfileAvatarPathPopup(CharacterSession session)
+    {
+        ImGui.SetNextWindowSize(new Vector2(420, 0));
+        if (!ImGui.BeginPopup("Upload picture##profileAvatarPath"))
+        {
+            return;
+        }
+
+        ImGui.TextColored(MutedText, "Path to a png / jpg / webp");
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputTextWithHint("##profileAvatarPathPopup", "/path/to/image.png", ref profileAvatarPathInput, 512);
+        ImGui.Spacing();
+        using (ImRaii.Disabled(profileAvatarBusy))
+        {
+            if (ImGui.Button("Upload", new Vector2(120, 0)))
+            {
+                UploadProfileAvatar(session, profileAvatarPathInput);
+                ImGui.CloseCurrentPopup();
+            }
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel", new Vector2(120, 0)))
+        {
+            ImGui.CloseCurrentPopup();
+        }
+
+        if (profileAvatarError is { Length: > 0 } err)
+        {
+            ImGui.TextColored(Danger, err);
+        }
+
+        ImGui.EndPopup();
+    }
+
+    private void ApplyAvatarSummary(CharacterSession session, AccountSummary updated)
+    {
+        // Same /avatars/{id}.ext URL after a replace — drop the cached GPU texture so the new bytes load.
+        thumbnails.Invalidate(ResolveAvatarUrl(session.AvatarImageUrl));
+        thumbnails.Invalidate(ResolveAvatarUrl(updated.AvatarImageUrl));
+
+        session.AvatarIcon = updated.AvatarIcon;
+        session.AvatarColorHex = updated.AvatarColorHex;
+        session.AvatarImageUrl = updated.AvatarImageUrl;
+        session.Bio = updated.Bio;
+        session.StatusMessage = updated.StatusMessage;
+        profileIconInput = updated.AvatarIcon;
+        profileColorInput = updated.AvatarColorHex;
+        profileImageUrl = updated.AvatarImageUrl;
+        onSessionChanged(session);
+    }
+
+    private void UploadProfileAvatar(CharacterSession session, string rawPath)
+    {
+        var path = rawPath.Trim().Trim('"');
+        if (path.Length == 0 || !File.Exists(path))
+        {
+            profileAvatarError = "Pick an existing png, jpg, or webp file.";
+            return;
+        }
+
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is not (".png" or ".jpg" or ".jpeg" or ".webp"))
+        {
+            profileAvatarError = "Use a png, jpg, or webp image.";
+            return;
+        }
+
+        var info = new FileInfo(path);
+        if (info.Length > 1024 * 1024)
+        {
+            profileAvatarError = "Keep it under 1 MB.";
+            return;
+        }
+
+        profileAvatarBusy = true;
+        profileAvatarError = null;
+        var token = session.Token;
+        _ = Task.Run(async () =>
+        {
+            var updated = await authClient.UploadAvatarAsync(token, path);
+            profileAvatarBusy = false;
+            if (updated is null)
+            {
+                profileAvatarError = "Couldn't upload that picture.";
+                return;
+            }
+
+            ApplyAvatarSummary(session, updated);
+        });
+    }
+
+    private void ClearProfileAvatar(CharacterSession session)
+    {
+        profileAvatarBusy = true;
+        profileAvatarError = null;
+        var token = session.Token;
+        _ = Task.Run(async () =>
+        {
+            var updated = await authClient.ClearAvatarAsync(token);
+            profileAvatarBusy = false;
+            if (updated is null)
+            {
+                profileAvatarError = "Couldn't remove the picture.";
+                return;
+            }
+
+            ApplyAvatarSummary(session, updated);
+        });
+    }
+
     private void SaveProfile(CharacterSession session)
     {
         var token = session.Token;
@@ -268,11 +497,7 @@ internal sealed partial class MainWindow
             profileSaving = false;
             if (outcome.Account is { } updated)
             {
-                session.AvatarIcon = updated.AvatarIcon;
-                session.AvatarColorHex = updated.AvatarColorHex;
-                session.Bio = updated.Bio;
-                session.StatusMessage = updated.StatusMessage;
-                onSessionChanged(session);
+                ApplyAvatarSummary(session, updated);
             }
             else
             {

@@ -50,6 +50,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly KeysClient keysClient;
     private readonly AlphaChannel.Plugin.Crypto.KeyVault keyVault;
     private readonly Whispers.WhisperMirror whisperMirror;
+    private readonly NearbyAutoWatch nearbyAutoWatch;
     private ulong lastWhisperContentId = ulong.MaxValue;
 
     // Written from the network thread (OnRemoteState), read/cleared on the main thread
@@ -86,6 +87,13 @@ public sealed class Plugin : IDalamudPlugin
     {
         Cfg = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Cfg.Initialize(PluginInterface);
+        // Old builds defaulted AutoWatchNearby to true; that scan wiped YouTube typing by
+        // flipping Player tabs / joining nearby names. Force off until the feature is re-enabled.
+        if (Cfg.AutoWatchNearby)
+        {
+            Cfg.AutoWatchNearby = false;
+            Cfg.Save();
+        }
 
         // VideoEngine's own constructor calls DxHandler.Initialise, matching the original
         // Aetherphone ordering - no separate call needed here.
@@ -119,6 +127,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow = new MainWindow(screenController, video, queue, stream, RequestRename, authClient, signInFlow,
             friendsClient, activityClient, dmClient, reportClient, tweeterClient, pluginHubClient, venuesClient, liveClient,
             twitchClient, keyVault, whisperMirror, UpdateSessionForCurrentCharacter);
+        nearbyAutoWatch = new NearbyAutoWatch(stream, mainWindow);
         windowSystem.AddWindow(mainWindow);
 
         Framework.Update += OnFrameworkUpdate;
@@ -127,16 +136,79 @@ public sealed class Plugin : IDalamudPlugin
         ContextMenu.OnMenuOpened += OnMenuOpened;
         CommandManager.AddHandler("/achannel", new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the AlphaChannel window.",
+            HelpMessage = "Open AlphaChannel. /achannel watch <name> | leave | stage.",
         });
     }
 
-    private void OnCommand(string command, string arguments) => ToggleMainWindow();
+    private void OnCommand(string command, string arguments)
+    {
+        var args = arguments.Trim();
+        if (args.Length == 0)
+        {
+            ToggleMainWindow();
+            return;
+        }
 
-    // Right-click a player -> Join Stream, using their character name as the join target. Works
+        var space = args.IndexOf(' ');
+        var verb = (space < 0 ? args : args[..space]).ToLowerInvariant();
+        var rest = space < 0 ? string.Empty : args[(space + 1)..].Trim();
+
+        switch (verb)
+        {
+            case "watch":
+                if (rest.Length == 0)
+                {
+                    ChatGui.Print("Usage: /achannel watch <host name>");
+                    return;
+                }
+
+                // Viewer mode needs AlphaChannel installed — ScreenPainter draws locally from /rt.
+                queue.Clear();
+                mainWindow.OpenViewerAndJoin(rest);
+                ChatGui.Print($"[AlphaChannel] Joining {rest}… Expand the capsule for the full UI.");
+                break;
+
+            case "leave":
+                mainWindow.LeaveStream();
+                ChatGui.Print("[AlphaChannel] Left the stream.");
+                break;
+
+            case "stage":
+                // Convenience dance for stage presence. Penumbra VFX screen pack is parked for later.
+                try
+                {
+                    SendChatCommand("/dance");
+                }
+                catch (Exception exception)
+                {
+                    ChatGui.Print($"[AlphaChannel] Couldn't run /dance: {exception.Message}");
+                }
+
+                break;
+
+            default:
+                ToggleMainWindow();
+                break;
+        }
+    }
+
+    private static unsafe void SendChatCommand(string command)
+    {
+        var utf8 = FFXIVClientStructs.FFXIV.Client.System.String.Utf8String.FromString(command);
+        try
+        {
+            FFXIVClientStructs.FFXIV.Client.UI.UIModule.Instance()->ProcessChatBoxEntry(utf8);
+        }
+        finally
+        {
+            utf8->Dtor(true);
+        }
+    }
+
+    // Right-click a player -> Join Stream as AlphaChannel viewer (capsule + ScreenPainter). Works
     // whenever that player kept the name the first-connect prompt suggests by default (their real
     // character name) - same name-matching the manual "Host's name" field in the window already
-    // relies on, this is just a shortcut that skips typing it.
+    // relies on, this is just a shortcut that skips typing it. Both players need AlphaChannel.
     private void OnMenuOpened(IMenuOpenedArgs args)
     {
         if (args.Target is not MenuTargetDefault { TargetName.Length: > 0 } target)
@@ -149,11 +221,10 @@ public sealed class Plugin : IDalamudPlugin
             Name = "Join Stream",
             PrefixChar = 'A',
             PrefixColor = 588,
-            OnClicked = clickedArgs =>
+            OnClicked = _ =>
             {
                 queue.Clear();
-                _ = stream.JoinAsync(target.TargetName);
-                mainWindow.IsOpen = true;
+                mainWindow.OpenViewerAndJoin(target.TargetName);
             },
         });
 
@@ -233,6 +304,7 @@ public sealed class Plugin : IDalamudPlugin
 
         ApplyAutoPause();
         UpdateReactions();
+        nearbyAutoWatch.OnFrameworkUpdate();
 
         // Hosting: push the local queue's current state out to the relay every tick it changes
         // meaningfully - PublishStateAsync itself is cheap to call repeatedly (a JSON send), the
@@ -369,9 +441,9 @@ public sealed class Plugin : IDalamudPlugin
     // just records the latest message and OnFrameworkUpdate applies it on the next tick instead.
     private void OnRemoteState(AlphaChannel.Contracts.StreamControl message) => pendingRemoteState = message;
 
-    // A viewer's client receiving a host's stream.state - apply URL/position/pause and the
-    // host's screen transform to this client's own local ScreenPainter, same "every client draws
-    // its own copy" reasoning as VideoEngine.ApplyRemoteScreenTransform's own doc comment.
+    // Viewer path (including /achannel watch): apply URL/position/pause + screen transform to this
+    // client's local ScreenPainter. Relay /rt only — not Penumbra — so anyone without AlphaChannel
+    // (e.g. Lightless-only) cannot see the screen.
     private void ApplyRemoteState(AlphaChannel.Contracts.StreamControl message)
     {
         if (stream.Mode != StreamMode.Viewing || message.Url is not { Length: > 0 } url)
@@ -471,6 +543,7 @@ public sealed class Plugin : IDalamudPlugin
         Framework.Update -= OnFrameworkUpdate;
 
         mainWindow.Dispose();
+        nearbyAutoWatch.Dispose();
         whisperMirror.Dispose();
         stream.Dispose();
         screenController.Dispose();
