@@ -51,8 +51,11 @@ internal sealed partial class MainWindow
     {
         if (CurrentSession is not { } session)
         {
-            DrawPlainEmpty("Sign in to see your friends.", "Open Settings",
+            DrawPlainEmpty(
+                "Sign in to see your friends.",
+                "Open Settings",
                 () => currentPage = HomePage.Settings);
+
             return;
         }
 
@@ -63,210 +66,918 @@ internal sealed partial class MainWindow
 
         if (friendsClient.LastAccessDeniedReason is { } deniedReason)
         {
-            ImGui.TextColored(Danger, deniedReason switch
-            {
-                "lalafell_pending" => "Your account is pending review before Lalafell accounts can use Friends. Check back soon.",
-                "lalafell_denied" => "Social features aren't available for this account.",
-                _ => "Friends isn't available for this account right now.",
-            });
+            ImGui.TextColored(
+                Danger,
+                deniedReason switch
+                {
+                    "lalafell_pending" =>
+                        "Your account is pending review before Lalafell accounts can use Friends. Check back soon.",
+
+                    "lalafell_denied" =>
+                        "Social features aren't available for this account.",
+
+                    _ =>
+                        "Friends isn't available for this account right now.",
+                });
+
             return;
         }
 
-        // Same trap the Settings page warns about, surfaced again here since this is where it
-        // actually bites - typing a friend's real character name into this box will never match
-        // anything (see FriendService.FindAccountByDisplayNameAsync), and someone whose OWN name
-        // is still their random handle is equally unfindable to their friend right now.
+        // ---------------------------------------------------------
+        // Display-name warning
+        // ---------------------------------------------------------
+
         if (session.DisplayName == session.Handle)
         {
-            ImGui.TextColored(Danger, "Pick a display name in Settings so friends can find you.");
+            ImGui.TextColored(
+                Danger,
+                "Pick a display name in Settings so friends can find you.");
+
+            ImGui.SameLine();
+
             if (ImGui.SmallButton("Open Settings"))
             {
                 currentPage = HomePage.Settings;
             }
 
-            ImGui.Spacing();
+            ImGui.Dummy(new Vector2(0f, 10f));
         }
 
-        if (friendRequests.Incoming.Length > 0)
+        // ---------------------------------------------------------
+        // Add a friend
+        // ---------------------------------------------------------
+
+        ImGui.SetWindowFontScale(1.15f);
+
+        ImGui.TextColored(
+            Vector4.One,
+            "Add a friend");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 10f));
+
+        const float addCardHeight = 178f;
+
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.ChildRounding,
+            10f))
+        using (ImRaii.PushColor(
+            ImGuiCol.ChildBg,
+            new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+        using (var addCard = ImRaii.Child(
+            "##addFriendCard",
+            new Vector2(-1f, addCardHeight),
+            false,
+            ImGuiWindowFlags.NoScrollbar |
+            ImGuiWindowFlags.NoScrollWithMouse))
         {
-            ImGui.TextColored(Accent, $"Friend requests ({friendRequests.Incoming.Length})");
-            ImGui.Spacing();
-            foreach (var request in friendRequests.Incoming)
+            if (addCard)
             {
-                ImGui.PushID(request.Id);
-                ImGui.AlignTextToFramePadding();
-                ImGui.TextUnformatted(request.OtherDisplayName);
-                ImGui.SameLine();
-                if (ImGui.SmallButton("Accept"))
+                var origin =
+                    ImGui.GetCursorScreenPos();
+
+                var cardWidth =
+                    ImGui.GetWindowWidth();
+
+                const float outerPadding = 18f;
+                const float centreGap = 34f;
+
+                var usableWidth =
+                    cardWidth -
+                    (outerPadding * 2f);
+
+                var columnWidth =
+                    (usableWidth - centreGap) * 0.5f;
+
+                var leftX =
+                    origin.X + outerPadding;
+
+                var rightX =
+                    leftX +
+                    columnWidth +
+                    centreGap;
+
+                var dividerX =
+                    leftX +
+                    columnWidth +
+                    (centreGap * 0.5f);
+
+                // -------------------------------------------------
+                // Vertical divider
+                // -------------------------------------------------
+
+                ImGui.GetWindowDrawList()
+                    .AddRectFilled(
+                        new Vector2(
+                            dividerX,
+                            origin.Y + 20f),
+                        new Vector2(
+                            dividerX + 1f,
+                            origin.Y + addCardHeight - 20f),
+                        ImGui.GetColorU32(
+                            BorderSubtle));
+
+                // =================================================
+                // LEFT — invite code
+                // =================================================
+
+                ImGui.SetCursorScreenPos(
+                    new Vector2(
+                        leftX,
+                        origin.Y + 20f));
+
+                ImGui.TextColored(
+                    MutedText,
+                    "Have an invite code?");
+
+                ImGui.SetCursorScreenPos(
+                    new Vector2(
+                        leftX,
+                        origin.Y + 51f));
+
+                var leftButtonWidth = 94f;
+                var leftInputWidth =
+                    columnWidth -
+                    leftButtonWidth -
+                    10f;
+
+                ImGui.SetNextItemWidth(
+                    leftInputWidth);
+
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.FrameRounding,
+                    8f)
+                    .Push(
+                        ImGuiStyleVar.FramePadding,
+                        new Vector2(12f, 10f)))
+                using (ImRaii.PushColor(
+                    ImGuiCol.FrameBg,
+                    new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                    .Push(
+                        ImGuiCol.FrameBgHovered,
+                        new Vector4(0.07f, 0.09f, 0.145f, 1f))
+                    .Push(
+                        ImGuiCol.FrameBgActive,
+                        new Vector4(0.07f, 0.09f, 0.145f, 1f)))
                 {
-                    var token = session.Token;
-                    _ = Task.Run(async () => { await friendsClient.AcceptRequestAsync(token, request.Id); friendsDirty = true; });
+                    ImGui.InputTextWithHint(
+                        "##inviteCode",
+                        "Paste invite code",
+                        ref inviteCodeInput,
+                        16);
                 }
 
-                ImGui.SameLine();
-                if (ImGui.SmallButton("Decline"))
+                ImGui.SameLine(0f, 10f);
+
+                using (ImRaii.Disabled(
+                    inviteCodeRedeeming ||
+                    inviteCodeInput.Trim().Length == 0))
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.FrameRounding,
+                    8f))
+                using (ImRaii.PushColor(
+                    ImGuiCol.Button,
+                    Accent)
+                    .Push(
+                        ImGuiCol.ButtonHovered,
+                        AccentHover)
+                    .Push(
+                        ImGuiCol.ButtonActive,
+                        AccentActive))
                 {
-                    var token = session.Token;
-                    _ = Task.Run(async () => { await friendsClient.DeclineRequestAsync(token, request.Id); friendsDirty = true; });
-                }
-
-                ImGui.PopID();
-            }
-
-            ImGui.Spacing();
-            ImGui.Spacing();
-        }
-
-        if (friendRequests.Outgoing.Length > 0)
-        {
-            ImGui.TextColored(MutedText, "Waiting for them to accept:");
-            foreach (var request in friendRequests.Outgoing)
-            {
-                ImGui.BulletText(request.OtherDisplayName);
-            }
-
-            ImGui.Spacing();
-        }
-
-        ImGui.TextUnformatted($"Your friends ({friends.Length})");
-        ImGui.Spacing();
-        if (friends.Length == 0)
-        {
-            ImGui.TextColored(MutedText, friendsLoading
-                ? "Loading…"
-                : "No friends yet — add someone below.");
-            ImGui.Spacing();
-        }
-        else
-        {
-            foreach (var friend in friends)
-            {
-                ImGui.PushID(friend.AccountId);
-                DrawAvatarChip(friend.AvatarIcon, friend.AvatarColorHex, 20, friend.AvatarImageUrl);
-                ImGui.SameLine();
-                using (ImRaii.PushFont(UiBuilder.IconFont))
-                {
-                    ImGui.TextColored(friend.Online ? Good : MutedText, FontAwesomeIcon.Circle.ToIconString());
-                }
-
-                ImGui.SameLine();
-                if (ImGui.SmallButton(friend.DisplayName))
-                {
-                    OpenProfilePopup(session, friend.AccountId, friend.DisplayName);
-                }
-
-                if (friend.StatusMessage is { Length: > 0 } status)
-                {
-                    ImGui.SameLine();
-                    ImGui.TextColored(MutedText, status);
-                }
-                else if (friend.WatchingLabel is { Length: > 0 } watching)
-                {
-                    ImGui.SameLine();
-                    ImGui.TextColored(MutedText, watching);
-                }
-
-                ImGui.SameLine();
-                if (ImGui.SmallButton("Message"))
-                {
-                    StartOrOpenConversation(session, friend.AccountId, friend.DisplayName);
-                }
-
-                ImGui.SameLine();
-                if (ImGui.SmallButton("Remove"))
-                {
-                    var token = session.Token;
-                    var accountId = friend.AccountId;
-                    _ = Task.Run(async () => { await friendsClient.RemoveFriendAsync(token, accountId); friendsDirty = true; });
-                }
-
-                ImGui.SameLine();
-                using (ImRaii.PushColor(ImGuiCol.Text, Danger))
-                {
-                    if (ImGui.SmallButton("Block"))
+                    if (ImGui.Button(
+                        "Redeem",
+                        new Vector2(
+                            leftButtonWidth,
+                            38f)))
                     {
-                        var token = session.Token;
-                        var accountId = friend.AccountId;
-                        _ = Task.Run(async () => { await friendsClient.BlockAsync(token, accountId); friendsDirty = true; });
+                        inviteCodeRedeeming = true;
+                        inviteCodeError = null;
+
+                        var code =
+                            inviteCodeInput.Trim();
+
+                        var token =
+                            session.Token;
+
+                        _ = Task.Run(async () =>
+                        {
+                            var ok =
+                                await friendsClient
+                                    .RedeemInviteCodeAsync(
+                                        token,
+                                        code);
+
+                            inviteCodeRedeeming = false;
+
+                            inviteCodeError =
+                                ok
+                                    ? null
+                                    : "Couldn't redeem that code - it may be wrong, expired, or already used.";
+
+                            if (ok)
+                            {
+                                inviteCodeInput =
+                                    string.Empty;
+
+                                friendsDirty =
+                                    true;
+                            }
+                        });
                     }
                 }
 
-                ImGui.PopID();
-            }
-        }
+                ImGui.SetCursorScreenPos(
+                    new Vector2(
+                        leftX,
+                        origin.Y + 105f));
 
-        ImGui.Spacing();
-        var hairline = ImGui.GetCursorScreenPos();
-        var hairWidth = ImGui.GetContentRegionAvail().X;
-        ImGui.GetWindowDrawList().AddRectFilled(hairline, hairline + new Vector2(hairWidth, 1f),
-            ImGui.GetColorU32(BorderSubtle));
-        ImGui.Dummy(new Vector2(hairWidth, 12f));
+                ImGui.SetWindowFontScale(0.82f);
 
-        ImGui.TextUnformatted("Add a friend");
-        ImGui.Spacing();
+                ImGui.TextColored(
+                    MutedText,
+                    "Ask a friend for their invite code.");
 
-        ImGui.TextColored(MutedText, "Have an invite code?");
-        ImGui.SetNextItemWidth(-100f);
-        ImGui.InputTextWithHint("##inviteCode", "Paste invite code", ref inviteCodeInput, 16);
-        ImGui.SameLine();
-        using (ImRaii.Disabled(inviteCodeRedeeming || inviteCodeInput.Trim().Length == 0))
-        {
-            if (ImGui.Button("Redeem"))
-            {
-                inviteCodeRedeeming = true;
-                inviteCodeError = null;
-                var code = inviteCodeInput.Trim();
-                var token = session.Token;
-                _ = Task.Run(async () =>
+                ImGui.SetWindowFontScale(1f);
+
+                // =================================================
+                // RIGHT — search by AlphaChannel name
+                // =================================================
+
+                ImGui.SetCursorScreenPos(
+                    new Vector2(
+                        rightX,
+                        origin.Y + 20f));
+
+                ImGui.TextColored(
+                    MutedText,
+                    "Or search by their AlphaChannel name");
+
+                ImGui.SetCursorScreenPos(
+                    new Vector2(
+                        rightX,
+                        origin.Y + 51f));
+
+                const float searchButtonWidth = 108f;
+
+                var searchInputWidth =
+                    columnWidth -
+                    searchButtonWidth -
+                    10f;
+
+                ImGui.SetNextItemWidth(
+                    searchInputWidth);
+
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.FrameRounding,
+                    8f)
+                    .Push(
+                        ImGuiStyleVar.FramePadding,
+                        new Vector2(12f, 10f)))
+                using (ImRaii.PushColor(
+                    ImGuiCol.FrameBg,
+                    new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                    .Push(
+                        ImGuiCol.FrameBgHovered,
+                        new Vector4(0.07f, 0.09f, 0.145f, 1f))
+                    .Push(
+                        ImGuiCol.FrameBgActive,
+                        new Vector4(0.07f, 0.09f, 0.145f, 1f)))
                 {
-                    var ok = await friendsClient.RedeemInviteCodeAsync(token, code);
-                    inviteCodeRedeeming = false;
-                    inviteCodeError = ok ? null : "Couldn't redeem that code - it may be wrong, expired, or already used.";
-                    if (ok)
+                    if (ImGui.InputTextWithHint(
+                        "##friendSearch",
+                        "Type a name...",
+                        ref friendSearchInput,
+                        DisplayNameRules.MaxLength))
                     {
-                        inviteCodeInput = string.Empty;
-                        friendsDirty = true;
+                        RequestFriendSearch(
+                            session,
+                            friendSearchInput);
                     }
-                });
+                }
+
+                ImGui.SameLine(0f, 10f);
+
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.FrameRounding,
+                    8f))
+                using (ImRaii.PushColor(
+                    ImGuiCol.Button,
+                    Accent)
+                    .Push(
+                        ImGuiCol.ButtonHovered,
+                        AccentHover)
+                    .Push(
+                        ImGuiCol.ButtonActive,
+                        AccentActive))
+                {
+                    if (ImGui.Button(
+                        "Search",
+                        new Vector2(
+                            searchButtonWidth,
+                            38f)))
+                    {
+                        RequestFriendSearch(
+                            session,
+                            friendSearchInput);
+                    }
+                }
+
+                ImGui.SetCursorScreenPos(
+                    new Vector2(
+                        rightX,
+                        origin.Y + 105f));
+
+                ImGui.SetWindowFontScale(0.82f);
+
+                ImGui.TextColored(
+                    MutedText,
+                    "Enter their full AlphaChannel name.");
+
+                ImGui.SetWindowFontScale(1f);
             }
         }
+
+        // ---------------------------------------------------------
+        // Add-friend errors / live search results
+        // ---------------------------------------------------------
 
         if (inviteCodeError is { Length: > 0 } codeError)
         {
-            ImGui.TextColored(Danger, codeError);
+            ImGui.Dummy(
+                new Vector2(0f, 6f));
+
+            ImGui.TextColored(
+                Danger,
+                codeError);
         }
 
-        ImGui.Spacing();
-        ImGui.TextColored(MutedText, "Or search by their AlphaChannel name (not character name)");
-        ImGui.SetNextItemWidth(-1f);
-        if (ImGui.InputTextWithHint("##friendSearch", "Type a name…", ref friendSearchInput, DisplayNameRules.MaxLength))
+        if (friendSearchLoading ||
+            friendSearchResults.Length > 0 ||
+            friendSearchQuery.Length >= DisplayNameRules.MinLength)
         {
-            RequestFriendSearch(session, friendSearchInput);
-        }
+            ImGui.Dummy(
+                new Vector2(0f, 8f));
 
-        DrawFriendSearchResults(session);
+            DrawFriendSearchResults(
+                session);
+        }
 
         if (friendsError is { Length: > 0 } error)
         {
-            ImGui.TextColored(Danger, error);
+            ImGui.Dummy(
+                new Vector2(0f, 6f));
+
+            ImGui.TextColored(
+                Danger,
+                error);
         }
+
+        // ---------------------------------------------------------
+        // Horizontal divider
+        // ---------------------------------------------------------
+
+        ImGui.Dummy(
+            new Vector2(0f, 16f));
+
+        var dividerOrigin =
+            ImGui.GetCursorScreenPos();
+
+        var dividerWidth =
+            ImGui.GetContentRegionAvail().X;
+
+        ImGui.GetWindowDrawList()
+            .AddRectFilled(
+                dividerOrigin,
+                dividerOrigin +
+                new Vector2(
+                    dividerWidth,
+                    1f),
+                ImGui.GetColorU32(
+                    BorderSubtle));
+
+        ImGui.Dummy(
+            new Vector2(
+                dividerWidth,
+                18f));
+
+        // ---------------------------------------------------------
+        // Incoming requests
+        // ---------------------------------------------------------
+
+        if (friendRequests.Incoming.Length > 0)
+        {
+            ImGui.TextColored(
+                Accent,
+                $"Friend requests ({friendRequests.Incoming.Length})");
+
+            ImGui.Dummy(
+                new Vector2(0f, 8f));
+
+            foreach (var request in friendRequests.Incoming)
+            {
+                ImGui.PushID(
+                    request.Id);
+
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.ChildRounding,
+                    8f))
+                using (ImRaii.PushColor(
+                    ImGuiCol.ChildBg,
+                    new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+                using (var requestRow = ImRaii.Child(
+                    "##friendRequest",
+                    new Vector2(-1f, 50f),
+                    false,
+                    ImGuiWindowFlags.NoScrollbar |
+                    ImGuiWindowFlags.NoScrollWithMouse))
+                {
+                    if (requestRow)
+                    {
+                        var rowOrigin =
+                            ImGui.GetCursorScreenPos();
+
+                        ImGui.SetCursorScreenPos(
+                            rowOrigin +
+                            new Vector2(14f, 16f));
+
+                        ImGui.TextUnformatted(
+                            request.OtherDisplayName);
+
+                        var declineSize =
+                            new Vector2(84f, 30f);
+
+                        var acceptSize =
+                            new Vector2(84f, 30f);
+
+                        var declineX =
+                            rowOrigin.X +
+                            ImGui.GetWindowWidth() -
+                            declineSize.X -
+                            12f;
+
+                        var acceptX =
+                            declineX -
+                            acceptSize.X -
+                            8f;
+
+                        ImGui.SetCursorScreenPos(
+                            new Vector2(
+                                acceptX,
+                                rowOrigin.Y + 10f));
+
+                        using (ImRaii.PushStyle(
+                            ImGuiStyleVar.FrameRounding,
+                            7f))
+                        using (ImRaii.PushColor(
+                            ImGuiCol.Button,
+                            Accent)
+                            .Push(
+                                ImGuiCol.ButtonHovered,
+                                AccentHover)
+                            .Push(
+                                ImGuiCol.ButtonActive,
+                                AccentActive))
+                        {
+                            if (ImGui.Button(
+                                "Accept",
+                                acceptSize))
+                            {
+                                var token =
+                                    session.Token;
+
+                                _ = Task.Run(async () =>
+                                {
+                                    await friendsClient
+                                        .AcceptRequestAsync(
+                                            token,
+                                            request.Id);
+
+                                    friendsDirty =
+                                        true;
+                                });
+                            }
+                        }
+
+                        ImGui.SetCursorScreenPos(
+                            new Vector2(
+                                declineX,
+                                rowOrigin.Y + 10f));
+
+                        using (ImRaii.PushStyle(
+                            ImGuiStyleVar.FrameRounding,
+                            7f))
+                        {
+                            if (ImGui.Button(
+                                "Decline",
+                                declineSize))
+                            {
+                                var token =
+                                    session.Token;
+
+                                _ = Task.Run(async () =>
+                                {
+                                    await friendsClient
+                                        .DeclineRequestAsync(
+                                            token,
+                                            request.Id);
+
+                                    friendsDirty =
+                                        true;
+                                });
+                            }
+                        }
+                    }
+                }
+
+                ImGui.PopID();
+
+                ImGui.Dummy(
+                    new Vector2(0f, 6f));
+            }
+
+            ImGui.Dummy(
+                new Vector2(0f, 10f));
+        }
+
+        // ---------------------------------------------------------
+        // Outgoing requests
+        // ---------------------------------------------------------
+
+        if (friendRequests.Outgoing.Length > 0)
+        {
+            ImGui.TextColored(
+                MutedText,
+                "Waiting for them to accept:");
+
+            ImGui.Dummy(
+                new Vector2(0f, 5f));
+
+            foreach (var request in friendRequests.Outgoing)
+            {
+                ImGui.BulletText(
+                    request.OtherDisplayName);
+            }
+
+            ImGui.Dummy(
+                new Vector2(0f, 12f));
+        }
+
+        // ---------------------------------------------------------
+        // Your friends
+        // ---------------------------------------------------------
+
+        ImGui.SetWindowFontScale(1.15f);
+
+        ImGui.TextColored(
+            Vector4.One,
+            $"Your friends ({friends.Length})");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(
+            new Vector2(0f, 10f));
+
+        // ---------------------------------------------------------
+        // Empty friends state
+        // ---------------------------------------------------------
+
+        if (friends.Length == 0)
+        {
+            const float emptyHeight = 235f;
+
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.ChildRounding,
+                10f))
+            using (ImRaii.PushColor(
+                ImGuiCol.ChildBg,
+                new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+            using (var emptyCard = ImRaii.Child(
+                "##friendsEmpty",
+                new Vector2(-1f, emptyHeight),
+                false,
+                ImGuiWindowFlags.NoScrollbar |
+                ImGuiWindowFlags.NoScrollWithMouse))
+            {
+                if (emptyCard)
+                {
+                    var origin =
+                        ImGui.GetCursorScreenPos();
+
+                    var width =
+                        ImGui.GetWindowWidth();
+
+                    var centreX =
+                        origin.X +
+                        width * 0.5f;
+
+                    // Icon circle
+                    ImGui.GetWindowDrawList()
+                        .AddCircleFilled(
+                            new Vector2(
+                                centreX,
+                                origin.Y + 76f),
+                            34f,
+                            ImGui.GetColorU32(
+                                new Vector4(
+                                    Accent.X,
+                                    Accent.Y,
+                                    Accent.Z,
+                                    0.10f)));
+
+                    var iconText =
+                        FontAwesomeIcon.Users.ToIconString();
+
+                    Vector2 iconSize;
+
+                    using (ImRaii.PushFont(
+                        UiBuilder.IconFont))
+                    {
+                        iconSize =
+                            ImGui.CalcTextSize(
+                                iconText);
+
+                        ImGui.GetWindowDrawList()
+                            .AddText(
+                                new Vector2(
+                                    centreX -
+                                    iconSize.X * 0.5f,
+                                    origin.Y +
+                                    76f -
+                                    iconSize.Y * 0.5f),
+                                ImGui.GetColorU32(
+                                    Accent),
+                                iconText);
+                    }
+
+                    const string emptyTitle =
+                        "No friends yet";
+
+                    var titleSize =
+                        ImGui.CalcTextSize(
+                            emptyTitle);
+
+                    ImGui.GetWindowDrawList()
+                        .AddText(
+                            new Vector2(
+                                centreX -
+                                titleSize.X * 0.5f,
+                                origin.Y + 126f),
+                            ImGui.GetColorU32(
+                                Vector4.One),
+                            emptyTitle);
+
+                    var emptyText =
+                        friendsLoading
+                            ? "Loading..."
+                            : "Add someone above to get started.";
+
+                    var emptyTextSize =
+                        ImGui.CalcTextSize(
+                            emptyText);
+
+                    ImGui.GetWindowDrawList()
+                        .AddText(
+                            new Vector2(
+                                centreX -
+                                emptyTextSize.X * 0.5f,
+                                origin.Y + 156f),
+                            ImGui.GetColorU32(
+                                MutedText),
+                            emptyText);
+                }
+            }
+        }
+        else
+        {
+            // -----------------------------------------------------
+            // Populated friend list
+            // -----------------------------------------------------
+
+            foreach (var friend in friends)
+            {
+                ImGui.PushID(
+                    friend.AccountId);
+
+                const float rowHeight = 62f;
+
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.ChildRounding,
+                    8f))
+                using (ImRaii.PushColor(
+                    ImGuiCol.ChildBg,
+                    new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+                using (var row = ImRaii.Child(
+                    "##friendRow",
+                    new Vector2(-1f, rowHeight),
+                    false,
+                    ImGuiWindowFlags.NoScrollbar |
+                    ImGuiWindowFlags.NoScrollWithMouse))
+                {
+                    if (row)
+                    {
+                        var rowOrigin =
+                            ImGui.GetCursorScreenPos();
+
+                        DrawAvatarChip(
+                            friend.AvatarIcon,
+                            friend.AvatarColorHex,
+                            34,
+                            friend.AvatarImageUrl);
+
+                        ImGui.SameLine(
+                            0f,
+                            10f);
+
+                        ImGui.BeginGroup();
+
+                        if (ImGui.SmallButton(
+                            friend.DisplayName))
+                        {
+                            OpenProfilePopup(
+                                session,
+                                friend.AccountId,
+                                friend.DisplayName);
+                        }
+
+                        var detail =
+                            friend.StatusMessage is { Length: > 0 } status
+                                ? status
+                                : friend.WatchingLabel is { Length: > 0 } watching
+                                    ? watching
+                                    : friend.Online
+                                        ? "Online"
+                                        : "Offline";
+
+                        ImGui.TextColored(
+                            friend.Online
+                                ? Good
+                                : MutedText,
+                            detail);
+
+                        ImGui.EndGroup();
+
+                        var blockSize =
+                            new Vector2(72f, 30f);
+
+                        var removeSize =
+                            new Vector2(76f, 30f);
+
+                        var messageSize =
+                            new Vector2(84f, 30f);
+
+                        var right =
+                            rowOrigin.X +
+                            ImGui.GetWindowWidth() -
+                            12f;
+
+                        ImGui.SetCursorScreenPos(
+                            new Vector2(
+                                right -
+                                blockSize.X,
+                                rowOrigin.Y + 16f));
+
+                        using (ImRaii.PushColor(
+                            ImGuiCol.Text,
+                            Danger))
+                        {
+                            if (ImGui.Button(
+                                "Block",
+                                blockSize))
+                            {
+                                var token =
+                                    session.Token;
+
+                                var accountId =
+                                    friend.AccountId;
+
+                                _ = Task.Run(async () =>
+                                {
+                                    await friendsClient
+                                        .BlockAsync(
+                                            token,
+                                            accountId);
+
+                                    friendsDirty =
+                                        true;
+                                });
+                            }
+                        }
+
+                        ImGui.SetCursorScreenPos(
+                            new Vector2(
+                                right -
+                                blockSize.X -
+                                8f -
+                                removeSize.X,
+                                rowOrigin.Y + 16f));
+
+                        if (ImGui.Button(
+                            "Remove",
+                            removeSize))
+                        {
+                            var token =
+                                session.Token;
+
+                            var accountId =
+                                friend.AccountId;
+
+                            _ = Task.Run(async () =>
+                            {
+                                await friendsClient
+                                    .RemoveFriendAsync(
+                                        token,
+                                        accountId);
+
+                                friendsDirty =
+                                    true;
+                            });
+                        }
+
+                        ImGui.SetCursorScreenPos(
+                            new Vector2(
+                                right -
+                                blockSize.X -
+                                removeSize.X -
+                                messageSize.X -
+                                16f,
+                                rowOrigin.Y + 16f));
+
+                        using (ImRaii.PushColor(
+                            ImGuiCol.Button,
+                            Accent)
+                            .Push(
+                                ImGuiCol.ButtonHovered,
+                                AccentHover)
+                            .Push(
+                                ImGuiCol.ButtonActive,
+                                AccentActive))
+                        {
+                            if (ImGui.Button(
+                                "Message",
+                                messageSize))
+                            {
+                                StartOrOpenConversation(
+                                    session,
+                                    friend.AccountId,
+                                    friend.DisplayName);
+                            }
+                        }
+                    }
+                }
+
+                ImGui.PopID();
+
+                ImGui.Dummy(
+                    new Vector2(0f, 7f));
+            }
+        }
+
+        // ---------------------------------------------------------
+        // Blocked accounts
+        // ---------------------------------------------------------
 
         if (blockedAccounts.Length > 0)
         {
-            ImGui.Spacing();
-            ImGui.Spacing();
-            ImGui.TextUnformatted($"Blocked ({blockedAccounts.Length})");
-            ImGui.Spacing();
+            ImGui.Dummy(
+                new Vector2(0f, 18f));
+
+            ImGui.TextUnformatted(
+                $"Blocked ({blockedAccounts.Length})");
+
+            ImGui.Dummy(
+                new Vector2(0f, 8f));
+
             foreach (var blocked in blockedAccounts)
             {
-                ImGui.PushID(blocked.Id);
-                ImGui.BulletText(blocked.DisplayName);
+                ImGui.PushID(
+                    blocked.Id);
+
+                ImGui.TextUnformatted(
+                    blocked.DisplayName);
+
                 ImGui.SameLine();
-                if (ImGui.SmallButton("Unblock"))
+
+                if (ImGui.SmallButton(
+                    "Unblock"))
                 {
-                    var token = session.Token;
-                    var accountId = blocked.Id;
-                    _ = Task.Run(async () => { await friendsClient.UnblockAsync(token, accountId); friendsDirty = true; });
+                    var token =
+                        session.Token;
+
+                    var accountId =
+                        blocked.Id;
+
+                    _ = Task.Run(async () =>
+                    {
+                        await friendsClient
+                            .UnblockAsync(
+                                token,
+                                accountId);
+
+                        friendsDirty =
+                            true;
+                    });
                 }
 
                 ImGui.PopID();

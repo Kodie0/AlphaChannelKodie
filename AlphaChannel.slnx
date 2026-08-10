@@ -1,7 +1,17 @@
 <Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
   <Folder Name="/src/">
-    <Project Path="src/AlphaChannel.Contracts/AlphaChannel.Contracts.csproj" />
-    <Project Path="src/AlphaChannel.Plugin/AlphaChannel.Plugin.csproj" />
-    <Project Path="src/AlphaChannel.Server/AlphaChannel.Server.csproj" />
+    <Project Path="src/AlphaChannel.Contracts/AlphaChannel.Contracts.csproj">
+      <Platform Solution="*|x64" Project="x64" />
+    </Project>
+    <Project Path="src/AlphaChannel.Plugin/AlphaChannel.Plugin.csproj">
+      <Platform Solution="*|x64" Project="x64" />
+    </Project>
+    <Project Path="src/AlphaChannel.Server/AlphaChannel.Server.csproj">
+      <Platform Solution="*|x64" Project="x64" />
+    </Project>
   </Folder>
 </Solution>

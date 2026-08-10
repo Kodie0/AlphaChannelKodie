@@ -1,10 +1,11 @@
-using System.Diagnostics;
 using AlphaChannel.Plugin.Auth;
 using AlphaChannel.Plugin.Video;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Textures;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
+using System.Diagnostics;
 
 namespace AlphaChannel.Plugin;
 
@@ -40,6 +41,7 @@ internal sealed partial class MainWindow : Window, IDisposable
     private static Vector4 CardBgHover => FadeForCustomBg(Colors.CardBgHover, 0.35f);
     private static Vector4 MutedText => Colors.MutedText;
     private static readonly Vector4 BorderSubtle = new(1f, 1f, 1f, 0.06f);
+    private ISharedImmediateTexture? alphaIconImage;
 
     // Set each frame in Draw() when a custom background texture is actually showing.
     private static bool customBackgroundActive;
@@ -96,13 +98,15 @@ internal sealed partial class MainWindow : Window, IDisposable
     private readonly Action<CharacterSession?> onSessionChanged;
 
     // Room for left nav + center + optional right rail + bottom media bar (mockup chrome).
-    private static readonly Vector2 WindowSize = new(1400, 860);
+    private static readonly Vector2 WindowSize = new(1100, 860);
+    private static readonly Vector2 MiniModeSize = new(260, 860);
     // Compact capsule chrome while tucked away - wide enough for brand + expand + close.
     private static readonly Vector2 MinimizedSize = new(276, 40);
     // Wider capsule when "Watching First Last" is showing (viewer-only join).
     private static readonly Vector2 MinimizedViewerSize = new(340, 40);
     private const int PositionPinFrames = 3;
     private bool windowMinimized;
+    private bool miniMode;
     // True after /achannel watch or context-menu Join Stream: stay minimized; screen still
     // draws via ScreenPainter + /rt sync. Requires AlphaChannel on both sides — not Lightless.
     private bool viewerMode;
@@ -390,7 +394,9 @@ internal sealed partial class MainWindow : Window, IDisposable
     {
         Size = windowMinimized
             ? (viewerMode ? MinimizedViewerSize : MinimizedSize)
-            : WindowSize;
+            : miniMode
+                ? MiniModeSize
+                : WindowSize;
         if (windowMinimized)
         {
             Flags = ImGuiWindowFlags.NoTitleBar
@@ -421,6 +427,24 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    private void EnsureAlphaIconLoaded()
+    {
+        if (alphaIconImage is not null)
+        {
+            return;
+        }
+
+        var path = Path.Combine(
+            Plugin.PluginInterface.AssemblyLocation.DirectoryName!,
+            "Assets",
+            "alphaicon.png");
+
+        if (File.Exists(path))
+        {
+            alphaIconImage = Plugin.TextureProvider.GetFromFile(path);
+        }
+    }
+
     public override void Draw()
     {
         Colors = ThemeCatalog.Get(Plugin.Cfg.UiTheme, Plugin.Cfg.UiBackground);
@@ -448,55 +472,108 @@ internal sealed partial class MainWindow : Window, IDisposable
 
         var avail = ImGui.GetContentRegionAvail();
         var topHeight = MathF.Max(avail.Y - BottomBarHeight, 120f);
-        var showRightRail = currentPage == HomePage.Home;
-        var rightWidth = showRightRail ? RightRailWidth : 0f;
+
+        var playbackActive = queue.Current is not null;
+
+        var showRightRail = true;
+        var rightWidth = RightRailWidth;
         var centerWidth = MathF.Max(avail.X - SidebarWidth - rightWidth, 0f);
 
-        using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
-        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(14, 16)))
-        using (var sidebar = ImRaii.Child("##sidebar", new Vector2(SidebarWidth, topHeight), false, NavPaneFlags))
+        if (!miniMode)
         {
-            if (sidebar)
+            using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
+            using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(14, 16)))
+            using (var sidebar = ImRaii.Child(
+                "##sidebar",
+                new Vector2(SidebarWidth, topHeight),
+                false,
+                NavPaneFlags))
             {
-                DrawSidebar();
+                if (sidebar)
+                {
+                    DrawSidebar();
+                }
             }
-        }
 
-        ImGui.SameLine(0, 0);
+            ImGui.SameLine(0, 0);
 
-        // Settings keeps a scrollbar so the long preferences sheet stays usable; every other page
-        // hides chrome scrollbars (navbar / home / player / etc.).
-        var contentFlags = currentPage == HomePage.Settings
-            ? ImGuiWindowFlags.AlwaysUseWindowPadding
-            : PaddedChild | ImGuiWindowFlags.NoScrollWithMouse;
+            // Settings keeps a scrollbar so the long preferences sheet stays usable;
+            // every other page hides chrome scrollbars.
+            var contentFlags = currentPage == HomePage.Settings
+                ? ImGuiWindowFlags.AlwaysUseWindowPadding
+                : PaddedChild | ImGuiWindowFlags.NoScrollWithMouse;
 
-        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(24, 18)))
-        using (var content = ImRaii.Child("##content", new Vector2(centerWidth, topHeight), false, contentFlags))
-        {
-            if (content)
+            var contentOrigin = ImGui.GetCursorScreenPos();
+
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.WindowPadding,
+                new Vector2(24, 18)))
+            using (var content = ImRaii.Child(
+                "##content",
+                new Vector2(centerWidth, topHeight),
+                false,
+                contentFlags))
             {
-                DrawContent();
+                if (content)
+                {
+                    DrawContent();
+                }
             }
+
+            var contentMin = contentOrigin;
+            var contentMax = contentOrigin + new Vector2(centerWidth, topHeight);
+
+            var drawList = ImGui.GetForegroundDrawList();
+
+            drawList.AddLine(
+                contentMin,
+                new Vector2(contentMin.X, contentMax.Y),
+                ImGui.GetColorU32(BorderSubtle),
+                1f);
+
+            drawList.AddLine(
+                new Vector2(contentMax.X, contentMin.Y),
+                contentMax,
+                ImGui.GetColorU32(BorderSubtle),
+                1f);
+
+            drawList.AddLine(
+                new Vector2(contentMin.X, contentMax.Y),
+                contentMax,
+                ImGui.GetColorU32(BorderSubtle),
+                1f);
         }
 
         if (showRightRail)
         {
-            ImGui.SameLine(0, 0);
+            if (!miniMode)
+            {
+                ImGui.SameLine(0, 0);
+            }
             using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
             using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(16, 18)))
             using (var rail = ImRaii.Child("##rightRail", new Vector2(RightRailWidth, topHeight), false, NavPaneFlags))
             {
                 if (rail)
                 {
-                    DrawHomeRightRail();
+                    if (playbackActive)
+                    {
+                        DrawPlaybackRightRail();
+                    }
+                    else
+                    {
+                        DrawHomeRightRail();
+                    }
                 }
             }
         }
 
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() - 10f);
+
         using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
         using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(24, 14)))
         using (var bottom = ImRaii.Child("##bottomBar", new Vector2(avail.X, BottomBarHeight), false,
-                   NavPaneFlags))
+            NavPaneFlags))
         {
             if (bottom)
             {
@@ -522,12 +599,13 @@ internal sealed partial class MainWindow : Window, IDisposable
         const float buttonSize = 26f;
         const float gap = 8f;
         const float pad = 2f;
-        const float glowClearance = 20f;
+        const float glowClearance = 5f;
 
         var mainPos = ImGui.GetWindowPos();
         var mainSize = ImGui.GetWindowSize();
         var stripW = pad * 2 + buttonSize * 2 + gap;
         var stripH = pad * 2 + buttonSize;
+
         var stripPos = new Vector2(
             mainPos.X + mainSize.X - stripW - 10f,
             mainPos.Y - stripH - glowClearance);
@@ -562,6 +640,7 @@ internal sealed partial class MainWindow : Window, IDisposable
             }
 
             ImGui.SameLine(0, gap);
+
             if (DrawWindowControlButton("##ctlClose", FontAwesomeIcon.Times, buttonSize))
             {
                 CloseUi();
@@ -582,11 +661,15 @@ internal sealed partial class MainWindow : Window, IDisposable
 
         var drawList = ImGui.GetWindowDrawList();
         // Idle: soft MagentaGlow (same family as the outer halo). Hover: Accent rim strength.
-        var outline = hovered
-            ? new Vector4(Accent.X, Accent.Y, Accent.Z, 0.95f)
-            : new Vector4(MagentaGlow.X, MagentaGlow.Y, MagentaGlow.Z, 0.55f);
-        drawList.AddRect(origin, origin + new Vector2(size, size), ImGui.GetColorU32(outline), 8f,
-            ImDrawFlags.None, hovered ? 1.6f : 1.25f);
+        var background = hovered
+            ? new Vector4(Accent.X, Accent.Y, Accent.Z, 0.20f)
+            : new Vector4(CardBg.X, CardBg.Y, CardBg.Z, 0.95f);
+
+        drawList.AddRectFilled(
+            origin,
+            origin + new Vector2(size, size),
+            ImGui.GetColorU32(background),
+            8f);
 
         using (ImRaii.PushFont(UiBuilder.IconFont))
         {
@@ -798,17 +881,38 @@ internal sealed partial class MainWindow : Window, IDisposable
     {
         // Compact brand: accent mark + wordmark (tagline lives on Home).
         var brandOrigin = ImGui.GetCursorScreenPos();
+        var sidebarWidth = ImGui.GetContentRegionAvail().X;
         var drawList = ImGui.GetWindowDrawList();
-        const float mark = 28f;
-        drawList.AddRectFilled(brandOrigin, brandOrigin + new Vector2(mark, mark),
-            ImGui.GetColorU32(new Vector4(Accent.X, Accent.Y, Accent.Z, 0.22f)), 8f);
-        drawList.AddText(brandOrigin + new Vector2(8, 5), ImGui.GetColorU32(Accent), "A");
-        ImGui.Dummy(new Vector2(mark, mark));
-        ImGui.SameLine(0, 10);
-        ImGui.BeginGroup();
-        ImGui.Dummy(new Vector2(0, 4));
-        ImGui.TextUnformatted("ALPHA CHANNEL");
-        ImGui.EndGroup();
+        const float mark = 42f;
+
+        EnsureAlphaIconLoaded();
+
+        var centeredLogo = brandOrigin + new Vector2((sidebarWidth - mark) * 0.5f, 0);
+
+        var alphaWrap = alphaIconImage?.GetWrapOrDefault();
+
+        if (alphaWrap is not null)
+        {
+            drawList.AddImage(
+                alphaWrap.Handle,
+                centeredLogo,
+                centeredLogo + new Vector2(mark, mark),
+                Vector2.Zero,
+                Vector2.One,
+ImGui.GetColorU32(Vector4.One));
+        }
+
+        ImGui.Dummy(new Vector2(0, mark));
+
+        var brandText = "ALPHA CHANNEL";
+        var textWidth = ImGui.CalcTextSize(brandText).X;
+
+        ImGui.SetCursorPosX(
+            (sidebarWidth - textWidth) * 0.5f);
+
+        ImGui.SetWindowFontScale(1.25f);
+        ImGui.TextUnformatted(brandText);
+        ImGui.SetWindowFontScale(1f);
 
         ImGui.Dummy(new Vector2(0, 14));
 
@@ -851,7 +955,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         const float footerGap = 8f;
         const float bottomSlack = 10f;
         var versionH = ImGui.GetTextLineHeightWithSpacing();
-        var footerH = donateH + footerGap + versionH + bottomSlack;
+        var footerH = 190f;
 
         using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
         {
@@ -861,9 +965,60 @@ internal sealed partial class MainWindow : Window, IDisposable
                 ImGui.SetCursorPosY(footerStartY);
             }
 
-            DrawDonateLink(donateLabel, donateH);
-            ImGui.Dummy(new Vector2(0, footerGap));
+            var footerOrigin = ImGui.GetCursorScreenPos();
+            var panelWidth = ImGui.GetContentRegionAvail().X;
+            var footerHeight = 160f;
+
+            ImGui.GetWindowDrawList().AddRect(
+                footerOrigin,
+                footerOrigin + new Vector2(panelWidth, footerHeight),
+                ImGui.GetColorU32(BorderSubtle),
+                12f,
+                ImDrawFlags.None,
+                1f);
+
+            ImGui.Dummy(new Vector2(0, 8));
+
+            var usersText = $"{usersOnlineCount} users online";
+            var usersTextWidth = ImGui.CalcTextSize(usersText).X;
+            var dotWidth = ImGui.GetFontSize();
+
+            var totalWidth = dotWidth + 6 + usersTextWidth;
+
+            ImGui.SetCursorPosX(
+                ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - totalWidth) * 0.5f);
+
+            ImGui.TextColored(Good, "●");
+            ImGui.SameLine(0, 6);
+            ImGui.TextUnformatted(usersText);
+
+            ImGui.Dummy(new Vector2(0, 6));
+
+            var friendsOnline = friends.Count(f => f.Online);
+            var friendsText = $"{friendsOnline} friends online";
+            var friendsWidth = ImGui.CalcTextSize(friendsText).X;
+
+            ImGui.SetCursorPosX(
+                ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - friendsWidth) * 0.5f);
+
+            ImGui.TextColored(MutedText, friendsText);
+
+            ImGui.Dummy(new Vector2(0, 8));
+
             DrawVersionFooter();
+
+            ImGui.Dummy(new Vector2(0, 8));
+
+            DrawSupportLink(
+    "♥  Join on Patreon",
+    32f,
+    PatreonOrange,
+    PatreonOrangeHover,
+    "https://www.patreon.com/alphachannel");
+
+            ImGui.Dummy(new Vector2(0, 6));
+
+            DrawDonateLink("♥  Donate on Ko-fi", 32f);
         }
     }
 
@@ -882,7 +1037,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         ImGui.PushID((int)page);
 
         var rowStart = ImGui.GetCursorScreenPos();
-        var rowSize = new Vector2(ImGui.GetContentRegionAvail().X, 34f);
+        var rowSize = new Vector2(ImGui.GetContentRegionAvail().X, 38f);
         var drawList = ImGui.GetWindowDrawList();
 
         var clicked = ImGui.InvisibleButton("##navrow", rowSize);
@@ -899,7 +1054,7 @@ internal sealed partial class MainWindow : Window, IDisposable
 
         var textColor = active ? Vector4.One : MutedText;
         drawList.AddText(UiBuilder.IconFont, ImGui.GetFontSize(), rowStart + new Vector2(12, 9),
-            ImGui.GetColorU32(textColor), icon.ToIconString());
+            ImGui.GetColorU32(textColor), icon.ToIconString());using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
         drawList.AddText(rowStart + new Vector2(38, 9), ImGui.GetColorU32(textColor), label);
 
         if (badgeCount > 0)
@@ -962,6 +1117,9 @@ internal sealed partial class MainWindow : Window, IDisposable
     private static readonly Vector4 KofiPink = new(0.98f, 0.29f, 0.55f, 1f);
     private static readonly Vector4 KofiPinkHover = new(1f, 0.40f, 0.62f, 1f);
     private static readonly Vector4 KofiPinkActive = new(0.85f, 0.20f, 0.45f, 1f);
+
+    private static readonly Vector4 PatreonOrange = new(1f, 0.55f, 0.15f, 1f);
+    private static readonly Vector4 PatreonOrangeHover = new(1f, 0.68f, 0.30f, 1f);
     private static readonly string[] DonateLabels =
     [
         "Hey, like what you see?\nConsider supporting us",
@@ -969,41 +1127,95 @@ internal sealed partial class MainWindow : Window, IDisposable
     ];
     private const double DonateRotateSeconds = 30;
 
-    private void DrawDonateLink(string label, float height)
+    private static void DrawSupportLink(
+    string label,
+    float height,
+    Vector4 color,
+    Vector4 hoverColor,
+    string url)
     {
-        var width = ImGui.GetContentRegionAvail().X;
+        var width = ImGui.GetContentRegionAvail().X - 24f;
         var origin = ImGui.GetCursorScreenPos();
         var size = new Vector2(width, height);
+        var buttonOrigin = origin + new Vector2(12f, 0);
 
-        using (ImRaii.PushColor(ImGuiCol.Button, KofiPink)
-                   .Push(ImGuiCol.ButtonHovered, KofiPinkHover)
-                   .Push(ImGuiCol.ButtonActive, KofiPinkActive)
-                   .Push(ImGuiCol.Text, Vector4.One))
+        ImGui.SetCursorScreenPos(buttonOrigin);
+
+        if (ImGui.InvisibleButton($"##{label}", size))
         {
-            if (ImGui.Button("##kofiDonate", size))
+            try
             {
-                try
-                {
-                    Process.Start(new ProcessStartInfo("https://ko-fi.com/alphachannel") { UseShellExecute = true });
-                }
-                catch (Exception exception)
-                {
-                    AepLog.Warning($"[Donate] Failed to open browser: {exception.Message}");
-                }
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            catch (Exception exception)
+            {
+                AepLog.Warning($"[Support] Failed to open browser: {exception.Message}");
             }
         }
 
-        // Centered wrapped copy on top of the solid pink hit target (Button labels don't wrap).
-        var wrapWidth = MathF.Max(40f, width - 16f);
-        var textSize = ImGui.CalcTextSize(label, false, wrapWidth);
-        var textPos = origin + new Vector2((width - textSize.X) * 0.5f, (height - textSize.Y) * 0.5f);
-        ImGui.GetWindowDrawList().AddText(
-            ImGui.GetFont(),
-            ImGui.GetFontSize(),
+        var hovered = ImGui.IsItemHovered();
+        var drawList = ImGui.GetWindowDrawList();
+
+        drawList.AddRect(
+            buttonOrigin,
+            buttonOrigin + size,
+            ImGui.GetColorU32(hovered ? hoverColor : color),
+            8f,
+            ImDrawFlags.None,
+            1f);
+
+        var textSize = ImGui.CalcTextSize(label);
+        var textPos = buttonOrigin + new Vector2(
+            (width - textSize.X) * 0.5f,
+            (height - textSize.Y) * 0.5f);
+
+        drawList.AddText(
             textPos,
-            ImGui.GetColorU32(Vector4.One),
-            label,
-            wrapWidth);
+            ImGui.GetColorU32(hovered ? hoverColor : color),
+            label);
+    }
+
+    private void DrawDonateLink(string label, float height)
+    {
+        var width = ImGui.GetContentRegionAvail().X - 24f;
+        var origin = ImGui.GetCursorScreenPos();
+        var size = new Vector2(width, height);
+        var buttonOrigin = origin + new Vector2(12f, 0);
+
+        ImGui.SetCursorScreenPos(buttonOrigin);
+
+        if (ImGui.InvisibleButton("##kofiDonate", size))
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo("https://ko-fi.com/alphachannel") { UseShellExecute = true });
+            }
+            catch (Exception exception)
+            {
+                AepLog.Warning($"[Donate] Failed to open browser: {exception.Message}");
+            }
+        }
+
+        var hovered = ImGui.IsItemHovered();
+        var drawList = ImGui.GetWindowDrawList();
+
+        drawList.AddRect(
+            buttonOrigin,
+            buttonOrigin + size,
+            ImGui.GetColorU32(hovered ? KofiPinkHover : KofiPink),
+            8f,
+            ImDrawFlags.None,
+            1f);
+
+        var textSize = ImGui.CalcTextSize(label, false, width);
+        var textPos = buttonOrigin + new Vector2(
+            (width - textSize.X) * 0.5f,
+            (height - textSize.Y) * 0.5f);
+
+        drawList.AddText(
+    textPos,
+    ImGui.GetColorU32(hovered ? KofiPinkHover : KofiPink),
+    label);
     }
 
     private static string? cachedVersionText;
@@ -1194,36 +1406,267 @@ internal sealed partial class MainWindow : Window, IDisposable
 
     private void DrawRoster(string label, bool allowPromote)
     {
-        ImGui.TextUnformatted(label);
-        ImGui.Spacing();
-        if (stream.Roster.Length == 0)
+        // ---------------------------------------------------------
+        // TEMPORARY UI PREVIEW
+        // ---------------------------------------------------------
+
+        const bool showPreviewViewer = true;
+
+        var realCount =
+            stream.Roster.Length;
+
+        var displayCount =
+            realCount +
+            (showPreviewViewer ? 1 : 0);
+
+        var openParen =
+            label.LastIndexOf('(');
+
+        var displayLabel =
+            openParen >= 0
+                ? $"{label[..openParen]}({displayCount})"
+                : label;
+
+        ImGui.SetWindowFontScale(1.08f);
+
+        ImGui.TextColored(
+            Vector4.One,
+            displayLabel);
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 8f));
+
+        if (realCount == 0 &&
+            !showPreviewViewer)
         {
-            DrawPlainEmpty("Waiting for people…");
+            ImGui.TextColored(
+                MutedText,
+                "Waiting for people to join...");
+
             return;
         }
 
-        DrawAvatarStack(stream.Roster, maxShown: 12);
-        ImGui.Spacing();
-        for (var index = 0; index < stream.Roster.Length; index++)
+        if (realCount > 0)
         {
-            var participant = stream.Roster[index];
-            ImGui.BulletText(participant.DisplayName);
-            if (!allowPromote)
-            {
-                continue;
-            }
+            DrawAvatarStack(
+                stream.Roster,
+                maxShown: 12);
 
-            ImGui.SameLine();
-            ImGui.PushID(index);
-            if (ImGui.SmallButton("Make host"))
-            {
-                _ = stream.TransferHostAsync(participant.UserId);
-            }
-
-            ImGui.PopID();
+            ImGui.Dummy(
+                new Vector2(0f, 10f));
         }
 
-        ImGui.Spacing();
+        // ---------------------------------------------------------
+        // Real participants
+        // ---------------------------------------------------------
+
+        for (var index = 0;
+             index < realCount;
+             index++)
+        {
+            var participant =
+                stream.Roster[index];
+
+            ImGui.PushID(index);
+
+            DrawPartyRosterRow(
+                participant.DisplayName,
+                allowPromote,
+                canUseActions: true,
+                onPromote: () =>
+                    _ = stream.TransferHostAsync(
+                        participant.UserId));
+
+            ImGui.PopID();
+
+            ImGui.Dummy(
+                new Vector2(0f, 6f));
+        }
+
+        // ---------------------------------------------------------
+        // Temporary example viewer
+        // ---------------------------------------------------------
+
+        if (showPreviewViewer)
+        {
+            ImGui.PushID(
+                "##previewPartyViewer");
+
+            DrawPartyRosterRow(
+                "Example Viewer",
+                allowPromote,
+                canUseActions: false,
+                onPromote: null);
+
+            ImGui.PopID();
+
+            ImGui.Dummy(
+                new Vector2(0f, 6f));
+        }
+    }
+
+    private void DrawPartyRosterRow(
+    string displayName,
+    bool allowPromote,
+    bool canUseActions,
+    Action? onPromote)
+    {
+        const float rowHeight = 52f;
+
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.ChildRounding,
+            8f))
+        using (ImRaii.PushColor(
+            ImGuiCol.ChildBg,
+            new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+        using (var row = ImRaii.Child(
+            "##partyParticipantRow",
+            new Vector2(-1f, rowHeight),
+            false,
+            ImGuiWindowFlags.NoScrollbar |
+            ImGuiWindowFlags.NoScrollWithMouse))
+        {
+            if (!row)
+            {
+                return;
+            }
+
+            var origin =
+                ImGui.GetCursorScreenPos();
+
+            var rowWidth =
+                ImGui.GetWindowWidth();
+
+            // Online/live indicator.
+            ImGui.GetWindowDrawList()
+                .AddCircleFilled(
+                    origin +
+                    new Vector2(18f, 26f),
+                    4f,
+                    ImGui.GetColorU32(Good));
+
+            // Name.
+            ImGui.GetWindowDrawList()
+                .AddText(
+                    origin +
+                    new Vector2(32f, 18f),
+                    ImGui.GetColorU32(
+                        Vector4.One),
+                    displayName);
+
+            if (!allowPromote)
+            {
+                return;
+            }
+
+            const float rightPadding = 12f;
+            const float gap = 8f;
+
+            var kickSize =
+                new Vector2(112f, 30f);
+
+            var hostSize =
+                new Vector2(104f, 30f);
+
+            // -----------------------------------------------------
+            // Kick from room — UI only for now
+            // -----------------------------------------------------
+
+            var kickPos =
+                new Vector2(
+                    origin.X +
+                    rowWidth -
+                    rightPadding -
+                    kickSize.X,
+                    origin.Y + 11f);
+
+            ImGui.SetCursorScreenPos(
+                kickPos);
+
+            using (ImRaii.Disabled(
+                !canUseActions))
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                7f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                new Vector4(
+                    0.16f,
+                    0.055f,
+                    0.07f,
+                    1f))
+                .Push(
+                    ImGuiCol.ButtonHovered,
+                    new Vector4(
+                        0.22f,
+                        0.07f,
+                        0.09f,
+                        1f))
+                .Push(
+                    ImGuiCol.ButtonActive,
+                    new Vector4(
+                        0.25f,
+                        0.08f,
+                        0.10f,
+                        1f)))
+            {
+                // Deliberately no action yet.
+                ImGui.Button(
+                    "Kick from room",
+                    kickSize);
+            }
+
+            // -----------------------------------------------------
+            // Make host
+            // -----------------------------------------------------
+
+            var hostPos =
+                new Vector2(
+                    kickPos.X -
+                    gap -
+                    hostSize.X,
+                    kickPos.Y);
+
+            ImGui.SetCursorScreenPos(
+                hostPos);
+
+            using (ImRaii.Disabled(
+                !canUseActions))
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                7f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                new Vector4(
+                    0.055f,
+                    0.07f,
+                    0.115f,
+                    1f))
+                .Push(
+                    ImGuiCol.ButtonHovered,
+                    new Vector4(
+                        0.075f,
+                        0.095f,
+                        0.15f,
+                        1f))
+                .Push(
+                    ImGuiCol.ButtonActive,
+                    new Vector4(
+                        0.075f,
+                        0.095f,
+                        0.15f,
+                        1f)))
+            {
+                if (ImGui.Button(
+                    "Make host",
+                    hostSize) &&
+                    canUseActions)
+                {
+                    onPromote?.Invoke();
+                }
+            }
+        }
     }
 
     public void Dispose()
@@ -1263,8 +1706,8 @@ internal sealed partial class MainWindow : Window, IDisposable
             ImGui.PushStyleColor(ImGuiCol.SliderGrabActive, AccentActive);
             ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 12f);
             ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, 12f);
-            ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 16f);
-            ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 16f);
+            ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 0f);
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0f);
             ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(12, 10));
             ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(12, 8));
             ImGui.PushStyleVar(ImGuiStyleVar.ItemInnerSpacing, new Vector2(8, 6));

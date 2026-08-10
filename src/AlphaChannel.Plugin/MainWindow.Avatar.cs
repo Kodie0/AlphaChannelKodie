@@ -99,55 +99,244 @@ internal sealed partial class MainWindow
     private static bool DrawIconPicker(ref string? selectedIcon)
     {
         var changed = false;
+
+        const float buttonSize = 32f;
+        const float gap = 8f;
+
+        var availableWidth =
+            ImGui.GetContentRegionAvail().X;
+
+        var columns =
+            Math.Max(
+                1,
+                (int)((availableWidth + gap) /
+                      (buttonSize + gap)));
+
         for (var index = 0; index < AvatarIcons.Length; index++)
         {
-            var icon = AvatarIcons[index];
-            if (index % 9 != 0)
+            var icon =
+                AvatarIcons[index];
+
+            if (index % columns != 0)
             {
-                ImGui.SameLine();
+                ImGui.SameLine(0f, gap);
             }
 
-            var isSelected = selectedIcon == icon;
-            using (ImRaii.PushColor(ImGuiCol.Button, isSelected ? AccentActive : FrameBg))
+            var isSelected =
+                selectedIcon == icon;
+
+            var origin =
+                ImGui.GetCursorScreenPos();
+
+            var size =
+                new Vector2(
+                    buttonSize,
+                    buttonSize);
+
+            ImGui.PushID(
+                $"avatarIcon_{icon}");
+
+            var clicked =
+                ImGui.InvisibleButton(
+                    "##icon",
+                    size);
+
+            var hovered =
+                ImGui.IsItemHovered();
+
+            ImGui.PopID();
+
+            var drawList =
+                ImGui.GetWindowDrawList();
+
+            var fill =
+                isSelected
+                    ? Accent
+                    : hovered
+                        ? CardBgHover
+                        : FrameBg;
+
+            drawList.AddCircleFilled(
+                origin +
+                size * 0.5f,
+                buttonSize * 0.5f,
+                ImGui.GetColorU32(fill));
+
+            if (isSelected)
             {
-                using (ImRaii.PushFont(UiBuilder.IconFont))
+                drawList.AddCircle(
+                    origin +
+                    size * 0.5f,
+                    buttonSize * 0.5f,
+                    ImGui.GetColorU32(
+                        new Vector4(
+                            1f,
+                            1f,
+                            1f,
+                            0.22f)),
+                    0,
+                    1.25f);
+            }
+
+            if (Enum.TryParse<FontAwesomeIcon>(
+                icon,
+                out var faIcon))
+            {
+                using (ImRaii.PushFont(
+                    UiBuilder.IconFont))
                 {
-                    if (Enum.TryParse<FontAwesomeIcon>(icon, out var faIcon) && ImGui.Button(faIcon.ToIconString(), new Vector2(28, 28)))
-                    {
-                        selectedIcon = icon;
-                        changed = true;
-                    }
+                    var glyph =
+                        faIcon.ToIconString();
+
+                    var glyphSize =
+                        ImGui.CalcTextSize(
+                            glyph);
+
+                    drawList.AddText(
+                        origin +
+                        (size - glyphSize) * 0.5f,
+                        ImGui.GetColorU32(
+                            Vector4.One),
+                        glyph);
                 }
+            }
+
+            if (clicked)
+            {
+                selectedIcon =
+                    icon;
+
+                changed =
+                    true;
             }
         }
 
         return changed;
     }
 
-    private static bool DrawColorPicker(ref string selectedColor)
+    private static bool DrawColorPicker(
+    ref string selectedColor)
     {
         var changed = false;
-        for (var index = 0; index < AvatarColors.Length; index++)
+
+        const float buttonSize = 32f;
+        const float gap = 8f;
+
+        var availableWidth =
+            ImGui.GetContentRegionAvail().X;
+
+        var columns =
+            Math.Max(
+                1,
+                (int)((availableWidth + gap) /
+                      (buttonSize + gap)));
+
+        for (var index = 0;
+             index < AvatarColors.Length;
+             index++)
         {
-            var color = AvatarColors[index];
-            if (index % 9 != 0)
+            var color =
+                AvatarColors[index];
+
+            if (index % columns != 0)
             {
-                ImGui.SameLine();
+                ImGui.SameLine(
+                    0f,
+                    gap);
             }
 
-            using (ImRaii.PushColor(ImGuiCol.Button, ParseAvatarColor(color)))
-            using (ImRaii.PushColor(ImGuiCol.ButtonHovered, ParseAvatarColor(color)))
-            using (ImRaii.PushColor(ImGuiCol.ButtonActive, ParseAvatarColor(color)))
+            var isSelected =
+                selectedColor == color;
+
+            var origin =
+                ImGui.GetCursorScreenPos();
+
+            var size =
+                new Vector2(
+                    buttonSize,
+                    buttonSize);
+
+            ImGui.PushID(
+                $"avatarColor_{color}");
+
+            var clicked =
+                ImGui.InvisibleButton(
+                    "##color",
+                    size);
+
+            var hovered =
+                ImGui.IsItemHovered();
+
+            ImGui.PopID();
+
+            var drawList =
+                ImGui.GetWindowDrawList();
+
+            var parsedColor =
+                ParseAvatarColor(
+                    color);
+
+            var center =
+                origin +
+                size * 0.5f;
+
+            var radius =
+                buttonSize * 0.5f;
+
+            drawList.AddCircleFilled(
+                center,
+                radius,
+                ImGui.GetColorU32(
+                    parsedColor));
+
+            if (hovered || isSelected)
             {
-                var label = selectedColor == color ? FontAwesomeIcon.Check.ToIconString() : " ";
-                using (ImRaii.PushFont(UiBuilder.IconFont))
+                drawList.AddCircle(
+                    center,
+                    radius,
+                    ImGui.GetColorU32(
+                        isSelected
+                            ? Vector4.One
+                            : new Vector4(
+                                1f,
+                                1f,
+                                1f,
+                                0.35f)),
+                    0,
+                    isSelected
+                        ? 2f
+                        : 1f);
+            }
+
+            if (isSelected)
+            {
+                using (ImRaii.PushFont(
+                    UiBuilder.IconFont))
                 {
-                    if (ImGui.Button(label + "##" + color, new Vector2(28, 28)))
-                    {
-                        selectedColor = color;
-                        changed = true;
-                    }
+                    var glyph =
+                        FontAwesomeIcon.Check
+                            .ToIconString();
+
+                    var glyphSize =
+                        ImGui.CalcTextSize(
+                            glyph);
+
+                    drawList.AddText(
+                        origin +
+                        (size - glyphSize) * 0.5f,
+                        ImGui.GetColorU32(
+                            Vector4.One),
+                        glyph);
                 }
+            }
+
+            if (clicked)
+            {
+                selectedColor =
+                    color;
+
+                changed =
+                    true;
             }
         }
 

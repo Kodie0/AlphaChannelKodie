@@ -31,117 +31,513 @@ internal sealed partial class MainWindow
 
     private void DrawPartyPanel()
     {
-        DrainPartyChat();
-        SectionHeader("Watch party");
-
         if (CurrentSession is null)
         {
-            ImGui.TextColored(MutedText, "Sign in under Settings to host or join a synced room.");
-            if (ImGui.SmallButton("Open Settings"))
+            ImGui.SetWindowFontScale(1.15f);
+
+            ImGui.TextColored(
+                Vector4.One,
+                "Watch party");
+
+            ImGui.SetWindowFontScale(1f);
+
+            ImGui.Dummy(new Vector2(0f, 6f));
+
+            ImGui.TextColored(
+                MutedText,
+                "Sign in to host or join a synced watch party.");
+
+            ImGui.Dummy(new Vector2(0f, 12f));
+
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                8f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                .Push(
+                    ImGuiCol.ButtonHovered,
+                    new Vector4(0.075f, 0.095f, 0.15f, 1f))
+                .Push(
+                    ImGuiCol.ButtonActive,
+                    new Vector4(0.075f, 0.095f, 0.15f, 1f)))
             {
-                currentPage = HomePage.Settings;
+                if (ImGui.Button(
+                    "Open Settings",
+                    new Vector2(120f, 34f)))
+                {
+                    currentPage = HomePage.Settings;
+                }
             }
 
             return;
         }
 
+        // ---------------------------------------------------------
+        // Heading
+        // ---------------------------------------------------------
+
+        ImGui.SetWindowFontScale(1.15f);
+
+        ImGui.TextColored(
+            Vector4.One,
+            "Watch party");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 10f));
+
         switch (stream.Mode)
         {
+            // -----------------------------------------------------
+            // Hosting
+            // -----------------------------------------------------
+
             case StreamMode.Hosting:
-                DrawStage("##partyHosting", () =>
                 {
-                    ImGui.TextColored(Good, "HOSTING");
-                    ImGui.TextUnformatted($"{CurrentDisplayName ?? "Your"} room");
-                    ImGui.TextColored(MutedText, $"{stream.Roster.Length} watching · playback stays locked to you");
-                    ImGui.Spacing();
-                    var isPrivate = stream.IsPrivate;
-                    if (ImGui.Checkbox("Private (hide from friends' presence)", ref isPrivate))
+                    // Temporary visual-only room name.
+                    var previewRoomName =
+                        $"{CurrentDisplayName ?? "Your"}'s Watch Party";
+
+                    var isPrivate =
+                        stream.IsPrivate;
+
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.ChildRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.ChildBg,
+                        new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+                    using (var statusCard = ImRaii.Child(
+                        "##partyHosting",
+                        new Vector2(-1f, 154f),
+                        false,
+                        ImGuiWindowFlags.NoScrollbar |
+                        ImGuiWindowFlags.NoScrollWithMouse))
                     {
-                        stream.IsPrivate = isPrivate;
+                        if (statusCard)
+                        {
+                            // HOSTING
+                            ImGui.SetCursorPos(
+                                new Vector2(14f, 12f));
+
+                            ImGui.TextColored(
+                                Good,
+                                "HOSTING");
+
+                            // Private party toggle in top-right.
+                            ImGui.SetCursorPos(
+                                new Vector2(
+                                    ImGui.GetWindowWidth() - 140f,
+                                    9f));
+
+                            if (ImGui.Checkbox(
+                                "Private party",
+                                ref isPrivate))
+                            {
+                                stream.IsPrivate =
+                                    isPrivate;
+                            }
+
+                            // Host
+                            ImGui.SetCursorPos(
+                                new Vector2(14f, 39f));
+
+                            ImGui.TextColored(
+                                Vector4.One,
+                                $"Host: {CurrentDisplayName ?? "You"}");
+
+                            // Status
+                            ImGui.SetCursorPos(
+                                new Vector2(14f, 63f));
+
+                            ImGui.SetWindowFontScale(0.80f);
+
+                            ImGui.TextColored(
+                                MutedText,
+                                $"{stream.Roster.Length} watching  •  Playback stays synced to you");
+
+                            ImGui.SetWindowFontScale(1f);
+
+                            // Room name label
+                            ImGui.SetCursorPos(
+                                new Vector2(14f, 91f));
+
+                            ImGui.SetWindowFontScale(0.78f);
+
+                            ImGui.TextColored(
+                                MutedText,
+                                "Room name");
+
+                            ImGui.SetWindowFontScale(1f);
+
+                            // Room name input
+                            ImGui.SetCursorPos(
+                                new Vector2(14f, 111f));
+
+                            ImGui.SetNextItemWidth(
+                                ImGui.GetWindowWidth() - 106f);
+
+                            using (ImRaii.PushStyle(
+                                ImGuiStyleVar.FrameRounding,
+                                7f)
+                                .Push(
+                                    ImGuiStyleVar.FramePadding,
+                                    new Vector2(12f, 7f)))
+                            using (ImRaii.PushColor(
+                                ImGuiCol.FrameBg,
+                                new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                                .Push(
+                                    ImGuiCol.FrameBgHovered,
+                                    new Vector4(0.07f, 0.09f, 0.145f, 1f))
+                                .Push(
+                                    ImGuiCol.FrameBgActive,
+                                    new Vector4(0.07f, 0.09f, 0.145f, 1f)))
+                            {
+                                ImGui.InputText(
+                                    "##previewRoomName",
+                                    ref previewRoomName,
+                                    80);
+                            }
+
+                            ImGui.SameLine(0f, 8f);
+
+                            using (ImRaii.PushStyle(
+                                ImGuiStyleVar.FrameRounding,
+                                7f))
+                            using (ImRaii.PushColor(
+                                ImGuiCol.Button,
+                                Accent)
+                                .Push(
+                                    ImGuiCol.ButtonHovered,
+                                    AccentHover)
+                                .Push(
+                                    ImGuiCol.ButtonActive,
+                                    AccentActive))
+                            {
+                                ImGui.Button(
+                                    "Save",
+                                    new Vector2(64f, 32f));
+                            }
+                        }
                     }
 
-                    if (ImGui.Button("Copy party invite", new Vector2(-1, 30)))
+                    ImGui.Dummy(
+                        new Vector2(0f, 10f));
+
+                    // Invite button directly below the card.
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.Button,
+                        new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                        .Push(
+                            ImGuiCol.ButtonHovered,
+                            new Vector4(0.075f, 0.095f, 0.15f, 1f))
+                        .Push(
+                            ImGuiCol.ButtonActive,
+                            new Vector4(0.075f, 0.095f, 0.15f, 1f)))
                     {
-                        ImGui.SetClipboardText(
-                            $"Come watch with me! Right-click my character and choose \"Join Stream\" " +
-                            $"(or open AlphaChannel → Player and join \"{CurrentDisplayName}\").");
+                        if (ImGui.Button(
+                            "Copy party invite",
+                            new Vector2(150f, 32f)))
+                        {
+                            ImGui.SetClipboardText(
+                                $"Come watch with me! Right-click my character and choose \"Join Stream\" " +
+                                $"(or open AlphaChannel → Player and join \"{CurrentDisplayName}\").");
+                        }
                     }
-                });
-                DrawRoster($"Watching ({stream.Roster.Length})", allowPromote: true);
-                DrawReactions();
-                ImGui.Spacing();
-                DrawPartyChat();
-                break;
+
+                    ImGui.Dummy(
+                        new Vector2(0f, 14f));
+
+                    DrawRoster(
+                        $"Watching ({stream.Roster.Length})",
+                        allowPromote: true);
+
+                    break;
+                }
+
+            // -----------------------------------------------------
+            // Viewing
+            // -----------------------------------------------------
 
             case StreamMode.Viewing:
-                DrawStage("##partyViewing", () =>
                 {
-                    ImGui.TextColored(Good, "IN ROOM");
-                    ImGui.TextUnformatted(joinedHostDisplayName is { } host ? $"{host}'s room" : "A friend's room");
-                    ImGui.TextColored(MutedText, $"{stream.Roster.Length} also here");
-                    ImGui.Spacing();
-                    if (ImGui.Button("Leave room", new Vector2(-1, 30)))
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.ChildRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.ChildBg,
+                        new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+                    using (var statusCard = ImRaii.Child(
+                        "##partyViewing",
+                        new Vector2(-1f, 104f),
+                        false,
+                        ImGuiWindowFlags.NoScrollbar |
+                        ImGuiWindowFlags.NoScrollWithMouse))
                     {
-                        LeaveStream();
-                        partyChatLines.Clear();
+                        if (statusCard)
+                        {
+                            ImGui.SetCursorPos(
+                                new Vector2(14f, 12f));
+
+                            ImGui.TextColored(
+                                Good,
+                                "IN ROOM");
+
+                            ImGui.SetCursorPos(
+                                new Vector2(14f, 38f));
+
+                            ImGui.TextColored(
+                                Vector4.One,
+                                joinedHostDisplayName is { } host
+                                    ? $"{host}'s room"
+                                    : "A friend's room");
+
+                            ImGui.SetCursorPos(
+                                new Vector2(14f, 64f));
+
+                            ImGui.SetWindowFontScale(0.82f);
+
+                            ImGui.TextColored(
+                                MutedText,
+                                $"{stream.Roster.Length} also here  •  Playback is synced to the host");
+
+                            ImGui.SetWindowFontScale(1f);
+                        }
                     }
-                });
-                DrawRoster($"Also here ({stream.Roster.Length})", allowPromote: false);
-                DrawReactions();
-                ImGui.Spacing();
-                DrawPartyChat();
-                break;
+
+                    ImGui.Dummy(new Vector2(0f, 14f));
+
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.Button,
+                        new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                        .Push(
+                            ImGuiCol.ButtonHovered,
+                            new Vector4(0.075f, 0.095f, 0.15f, 1f))
+                        .Push(
+                            ImGuiCol.ButtonActive,
+                            new Vector4(0.075f, 0.095f, 0.15f, 1f)))
+                    {
+                        if (ImGui.Button(
+                            "Leave room",
+                            new Vector2(120f, 34f)))
+                        {
+                            LeaveStream();
+                            partyChatLines.Clear();
+                        }
+                    }
+
+                    ImGui.Dummy(new Vector2(0f, 20f));
+
+                    DrawRoster(
+                        $"Also here ({stream.Roster.Length})",
+                        allowPromote: false);
+
+                    break;
+                }
+
+            // -----------------------------------------------------
+            // Not currently in a party
+            // -----------------------------------------------------
 
             default:
-                ImGui.TextColored(MutedText,
-                    "Play a video above and friends can join you automatically. Or join someone:");
-                ImGui.Spacing();
-                ImGui.SetNextItemWidth(-100f);
-                if (playerFocusJoin)
                 {
-                    ImGui.SetKeyboardFocusHere();
-                    playerFocusJoin = false;
-                }
+                    ImGui.SetWindowFontScale(0.88f);
 
-                ImGui.InputTextWithHint("##hostName", "Their AlphaChannel name", ref joinHostNameInput, 32);
-                ImGui.SameLine();
-                if (ImGui.Button("Join", new Vector2(88, 0)))
-                {
-                    DoJoin(joinHostNameInput);
-                }
+                    ImGui.TextColored(
+                        MutedText,
+                        "Host automatically while playing, or join a friend's watch party.");
 
-                if (joinError is { } error)
-                {
-                    ImGui.TextColored(Danger, error);
-                }
+                    ImGui.SetWindowFontScale(1f);
 
-                break;
+                    ImGui.Dummy(new Vector2(0f, 14f));
+
+                    ImGui.TextColored(
+                        MutedText,
+                        "Join a party");
+
+                    ImGui.Dummy(new Vector2(0f, 4f));
+
+                    ImGui.SetNextItemWidth(-108f);
+
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f)
+                        .Push(
+                            ImGuiStyleVar.FramePadding,
+                            new Vector2(14f, 10f)))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.FrameBg,
+                        new Vector4(0.045f, 0.06f, 0.105f, 1f)))
+                    {
+                        if (playerFocusJoin)
+                        {
+                            ImGui.SetKeyboardFocusHere();
+                            playerFocusJoin = false;
+                        }
+
+                        ImGui.InputTextWithHint(
+                            "##hostName",
+                            "Enter their AlphaChannel name",
+                            ref joinHostNameInput,
+                            32);
+                    }
+
+                    ImGui.SameLine(0f, 10f);
+
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.Button,
+                        Accent)
+                        .Push(
+                            ImGuiCol.ButtonHovered,
+                            AccentHover)
+                        .Push(
+                            ImGuiCol.ButtonActive,
+                            AccentActive))
+                    {
+                        if (ImGui.Button(
+                            "Join",
+                            new Vector2(88f, 38f)))
+                        {
+                            DoJoin(joinHostNameInput);
+                        }
+                    }
+
+                    if (joinError is { } error)
+                    {
+                        ImGui.Dummy(new Vector2(0f, 8f));
+
+                        ImGui.TextColored(
+                            Danger,
+                            error);
+                    }
+
+                    break;
+                }
         }
+    }
+
+    private void DrawPartySocialPanel()
+    {
+        DrainPartyChat();
+
+        if (CurrentSession is null)
+        {
+            ImGui.TextColored(
+                MutedText,
+                "Sign in under Settings to use room chat and reactions.");
+
+            return;
+        }
+
+        if (stream.Mode == StreamMode.None)
+        {
+            ImGui.SetWindowFontScale(1.15f);
+
+            ImGui.TextColored(
+                Vector4.One,
+                "Chat");
+
+            ImGui.SetWindowFontScale(1f);
+
+            ImGui.Dummy(new Vector2(0f, 6f));
+
+            ImGui.TextColored(
+                MutedText,
+                "Join or host a watch party to use chat and reactions.");
+
+            return;
+        }
+
+        // DrawReactions already provides its own heading.
+        DrawReactions();
+
+        ImGui.Dummy(new Vector2(0f, 20f));
+
+        DrawPartyChat();
     }
 
     private void DrawPartyChat()
     {
-        ImGui.TextUnformatted("Party chat");
-        ImGui.TextColored(MutedText, "Only people in this room see these messages.");
-        ImGui.Spacing();
+        // ---------------------------------------------------------
+        // Heading
+        // ---------------------------------------------------------
 
-        var height = MathF.Min(180f, MathF.Max(100f, ImGui.GetContentRegionAvail().Y * 0.35f));
-        using (var child = ImRaii.Child("##partyChatLog", new Vector2(-1, height), true,
-                   ImGuiWindowFlags.NoScrollbar))
+        ImGui.TextUnformatted("Party chat");
+
+        ImGui.Dummy(new Vector2(0f, 2f));
+
+        ImGui.SetWindowFontScale(0.88f);
+
+        ImGui.TextColored(
+            MutedText,
+            "Only people in this room can see these messages.");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 10f));
+
+        // ---------------------------------------------------------
+        // Chat log
+        // ---------------------------------------------------------
+
+        var height = MathF.Min(
+            190f,
+            MathF.Max(
+                120f,
+                ImGui.GetContentRegionAvail().Y * 0.38f));
+
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.ChildRounding,
+            8f)
+            .Push(
+                ImGuiStyleVar.WindowPadding,
+                new Vector2(14f, 12f)))
+        using (ImRaii.PushColor(
+            ImGuiCol.ChildBg,
+            new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+        using (var child = ImRaii.Child(
+            "##partyChatLog",
+            new Vector2(-1f, height),
+            false,
+            ImGuiWindowFlags.None))
         {
             if (child)
             {
                 if (partyChatLines.Count == 0)
                 {
-                    ImGui.TextColored(MutedText, "Say something…");
+                    ImGui.SetWindowFontScale(0.88f);
+
+                    ImGui.TextColored(
+                        MutedText,
+                        "No messages yet.");
+
+                    ImGui.SetWindowFontScale(1f);
                 }
                 else
                 {
                     foreach (var (name, text) in partyChatLines)
                     {
-                        ImGui.TextColored(Accent, name);
-                        ImGui.SameLine();
-                        ImGui.TextWrapped(text);
+                        ImGui.TextColored(
+                            Accent,
+                            name);
+
+                        ImGui.SameLine(0f, 8f);
+
+                        ImGui.TextWrapped(
+                            text);
+
+                        ImGui.Dummy(
+                            new Vector2(0f, 4f));
                     }
                 }
 
@@ -153,16 +549,88 @@ internal sealed partial class MainWindow
             }
         }
 
-        ImGui.SetNextItemWidth(-70f);
-        var sent = ImGui.InputTextWithHint("##partyChatInput", "Message…", ref partyChatInput, 280,
-            ImGuiInputTextFlags.EnterReturnsTrue);
-        ImGui.SameLine();
-        if ((ImGui.Button("Send") || sent) && partyChatInput.Trim().Length > 0)
+        ImGui.Dummy(new Vector2(0f, 8f));
+
+        // ---------------------------------------------------------
+        // Message input
+        // ---------------------------------------------------------
+
+        ImGui.SetNextItemWidth(-76f);
+
+        bool sent;
+
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            8f)
+            .Push(
+                ImGuiStyleVar.FramePadding,
+                new Vector2(12f, 9f)))
+        using (ImRaii.PushColor(
+            ImGuiCol.FrameBg,
+            new Vector4(0.055f, 0.07f, 0.115f, 1f))
+            .Push(
+                ImGuiCol.FrameBgHovered,
+                new Vector4(0.07f, 0.09f, 0.145f, 1f))
+            .Push(
+                ImGuiCol.FrameBgActive,
+                new Vector4(0.07f, 0.09f, 0.145f, 1f)))
         {
-            var text = partyChatInput.Trim();
-            partyChatInput = string.Empty;
-            _ = stream.SendChatAsync(text);
-            partyChatStickToBottom = true;
+            sent = ImGui.InputTextWithHint(
+                "##partyChatInput",
+                "Message...",
+                ref partyChatInput,
+                280,
+                ImGuiInputTextFlags.EnterReturnsTrue);
+        }
+
+        ImGui.SameLine(0f, 8f);
+
+        // ---------------------------------------------------------
+        // Send
+        // ---------------------------------------------------------
+
+        var hasMessage =
+            partyChatInput.Trim().Length > 0;
+
+        var sendClicked = false;
+
+        using (ImRaii.Disabled(!hasMessage))
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            8f))
+        using (ImRaii.PushColor(
+            ImGuiCol.Button,
+            Accent)
+            .Push(
+                ImGuiCol.ButtonHovered,
+                AccentHover)
+            .Push(
+                ImGuiCol.ButtonActive,
+                AccentActive))
+        {
+            sendClicked = ImGui.Button(
+                "Send",
+                new Vector2(68f, 36f));
+        }
+
+        // ---------------------------------------------------------
+        // Send message
+        // ---------------------------------------------------------
+
+        if ((sendClicked || sent) &&
+            hasMessage)
+        {
+            var text =
+                partyChatInput.Trim();
+
+            partyChatInput =
+                string.Empty;
+
+            _ = stream.SendChatAsync(
+                text);
+
+            partyChatStickToBottom =
+                true;
         }
     }
 }

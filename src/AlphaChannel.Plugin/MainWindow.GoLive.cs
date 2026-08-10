@@ -28,8 +28,11 @@ internal sealed partial class MainWindow
     {
         if (CurrentSession is not { } session)
         {
-            DrawPlainEmpty("OBS ingest + stream keys live here after you sign in.", "Open Settings",
+            DrawPlainEmpty(
+                "OBS ingest + stream keys live here after you sign in.",
+                "Open Settings",
                 () => currentPage = HomePage.Settings);
+
             return;
         }
 
@@ -43,72 +46,408 @@ internal sealed partial class MainWindow
             RefreshFriendsLive(session.Token);
         }
 
-        DrawStage("##goliveStatus", () =>
-        {
-            if (liveStatus is not { } status)
-            {
-                ImGui.TextColored(MutedText, liveStatusLoading ? "Loading…" : "Couldn't load your status.");
-                return;
-            }
+        // Keep the Go Live content scrollable without scrolling
+        // the Player header/source navigation above it.
+        using var content = ImRaii.Child(
+            "##goLiveContent",
+            new Vector2(-1f, -1f),
+            false,
+            ImGuiWindowFlags.None);
 
-            ImGui.TextColored(status.IsLive ? Good : MutedText, status.IsLive ? "LIVE" : "OFFLINE");
-            ImGui.SetWindowFontScale(1.2f);
-            ImGui.TextUnformatted(status.IsLive ? "You're broadcasting" : "Not streaming right now");
-            ImGui.SetWindowFontScale(1f);
-            ImGui.TextColored(MutedText, "OBS → our ingest → friends open the HLS like any other URL.");
-        });
-
-        if (liveStatus is not { } live)
+        if (!content)
         {
             return;
         }
 
-        ImGui.TextUnformatted("OBS setup");
-        ImGui.TextColored(MutedText, "Stream → Custom service");
-        ImGui.Spacing();
+        // ---------------------------------------------------------
+        // Heading
+        // ---------------------------------------------------------
 
-        ImGui.TextColored(MutedText, "Server");
-        var rtmpServer = BuildRtmpServer();
-        ImGui.SetNextItemWidth(-1f);
-        ImGui.InputText("##rtmpServer", ref rtmpServer, 256, ImGuiInputTextFlags.ReadOnly);
-        if (ImGui.SmallButton("Copy server"))
+        ImGui.SetWindowFontScale(1.15f);
+
+        ImGui.TextColored(
+            Vector4.One,
+            "Go Live with OBS");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 10f));
+
+        // ---------------------------------------------------------
+        // Stream status
+        // ---------------------------------------------------------
+
+        if (liveStatus is not { } status)
         {
-            ImGui.SetClipboardText(rtmpServer);
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.ChildRounding,
+                8f))
+            using (ImRaii.PushColor(
+                ImGuiCol.ChildBg,
+                new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+            using (var statusCard = ImRaii.Child(
+                "##goLiveStatus",
+                new Vector2(-1f, 74f),
+                false,
+                ImGuiWindowFlags.NoScrollbar |
+                ImGuiWindowFlags.NoScrollWithMouse))
+            {
+                if (statusCard)
+                {
+                    ImGui.SetCursorPos(
+                        new Vector2(14f, 16f));
+
+                    ImGui.TextColored(
+                        MutedText,
+                        liveStatusLoading
+                            ? "Loading stream status..."
+                            : "Couldn't load your stream status.");
+                }
+            }
+
+            return;
         }
 
-        ImGui.Spacing();
-        ImGui.TextColored(MutedText, "Stream key");
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.ChildRounding,
+            8f))
+        using (ImRaii.PushColor(
+            ImGuiCol.ChildBg,
+            new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+        using (var statusCard = ImRaii.Child(
+            "##goLiveStatus",
+            new Vector2(-1f, 94f),
+            false,
+            ImGuiWindowFlags.NoScrollbar |
+            ImGuiWindowFlags.NoScrollWithMouse))
+        {
+            if (statusCard)
+            {
+                // Status line
+                ImGui.SetCursorPos(
+                    new Vector2(14f, 12f));
 
-        var cachedKey = Plugin.Cfg.StreamKeys.GetValueOrDefault(session.AccountId);
+                using (ImRaii.PushFont(UiBuilder.IconFont))
+                {
+                    ImGui.TextColored(
+                        status.IsLive ? Good : MutedText,
+                        FontAwesomeIcon.Circle.ToIconString());
+                }
+
+                ImGui.SameLine(0f, 8f);
+
+                ImGui.TextColored(
+                    status.IsLive ? Good : MutedText,
+                    status.IsLive
+                        ? "LIVE"
+                        : "OFFLINE");
+
+                // Main status
+                ImGui.SetCursorPos(
+                    new Vector2(14f, 39f));
+
+                ImGui.TextColored(
+                    Vector4.One,
+                    status.IsLive
+                        ? "You're broadcasting"
+                        : "Not streaming right now");
+
+                // Description
+                ImGui.SetCursorPos(
+                    new Vector2(14f, 65f));
+
+                ImGui.SetWindowFontScale(0.82f);
+
+                ImGui.TextColored(
+                    MutedText,
+                    "Stream from OBS and your friends can watch it here.");
+
+                ImGui.SetWindowFontScale(1f);
+            }
+        }
+
+        ImGui.Dummy(new Vector2(0f, 18f));
+
+        // ---------------------------------------------------------
+        // OBS setup
+        // ---------------------------------------------------------
+
+        ImGui.SetWindowFontScale(1.08f);
+
+        ImGui.TextColored(
+            Vector4.One,
+            "OBS setup");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 4f));
+
+        ImGui.SetWindowFontScale(0.82f);
+
+        ImGui.TextColored(
+            MutedText,
+            "Connect OBS using the server and stream key below.");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 14f));
+
+        // ---------------------------------------------------------
+        // Server
+        // ---------------------------------------------------------
+
+        ImGui.SetWindowFontScale(0.88f);
+
+        ImGui.TextColored(
+            MutedText,
+            "Server");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 4f));
+
+        var rtmpServer = BuildRtmpServer();
+
+        ImGui.SetNextItemWidth(-126f);
+
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            8f)
+            .Push(
+                ImGuiStyleVar.FramePadding,
+                new Vector2(14f, 10f)))
+        using (ImRaii.PushColor(
+            ImGuiCol.FrameBg,
+            new Vector4(0.045f, 0.06f, 0.105f, 1f))
+            .Push(
+                ImGuiCol.FrameBgHovered,
+                new Vector4(0.045f, 0.06f, 0.105f, 1f))
+            .Push(
+                ImGuiCol.FrameBgActive,
+                new Vector4(0.045f, 0.06f, 0.105f, 1f)))
+        {
+            ImGui.InputText(
+                "##rtmpServer",
+                ref rtmpServer,
+                256,
+                ImGuiInputTextFlags.ReadOnly);
+        }
+
+        ImGui.SameLine(0f, 10f);
+
+        // Copy server button
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            8f))
+        using (ImRaii.PushColor(
+            ImGuiCol.Button,
+            new Vector4(0.055f, 0.07f, 0.115f, 1f))
+            .Push(
+                ImGuiCol.ButtonHovered,
+                new Vector4(0.075f, 0.095f, 0.15f, 1f))
+            .Push(
+                ImGuiCol.ButtonActive,
+                new Vector4(0.075f, 0.095f, 0.15f, 1f)))
+        {
+            var buttonPos =
+                ImGui.GetCursorScreenPos();
+
+            var buttonSize =
+                new Vector2(110f, 38f);
+
+            if (ImGui.Button(
+                "##copyServer",
+                buttonSize))
+            {
+                ImGui.SetClipboardText(
+                    rtmpServer);
+            }
+
+            DrawPlayerActionButtonContent(
+                buttonPos,
+                buttonSize,
+                FontAwesomeIcon.Copy,
+                "Copy",
+                Vector4.One);
+        }
+
+        ImGui.Dummy(new Vector2(0f, 16f));
+
+        // ---------------------------------------------------------
+        // Stream key
+        // ---------------------------------------------------------
+
+        ImGui.SetWindowFontScale(0.88f);
+
+        ImGui.TextColored(
+            MutedText,
+            "Stream key");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(new Vector2(0f, 4f));
+
+        var cachedKey =
+            Plugin.Cfg.StreamKeys.GetValueOrDefault(
+                session.AccountId);
+
         if (cachedKey is null)
         {
-            ImGui.TextColored(MutedText, live.HasKey
-                ? "Key generated on another install — Regenerate to get a copy here."
-                : "No key yet — hit Generate below.");
+            ImGui.SetWindowFontScale(0.82f);
+
+            ImGui.TextColored(
+                MutedText,
+                status.HasKey
+                    ? "A stream key exists on another install. Regenerate it to use it here."
+                    : "No stream key yet. Generate one to connect OBS.");
+
+            ImGui.SetWindowFontScale(1f);
+
+            ImGui.Dummy(new Vector2(0f, 8f));
         }
         else
         {
-            var displayKey = streamKeyRevealed ? cachedKey : new string('•', Math.Min(cachedKey.Length, 32));
+            var displayKey =
+                streamKeyRevealed
+                    ? cachedKey
+                    : new string(
+                        '•',
+                        Math.Min(
+                            cachedKey.Length,
+                            32));
+
             ImGui.SetNextItemWidth(-1f);
-            ImGui.InputText("##streamKey", ref displayKey, 256, ImGuiInputTextFlags.ReadOnly);
 
-            if (ImGui.SmallButton(streamKeyRevealed ? "Hide" : "Reveal"))
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                8f)
+                .Push(
+                    ImGuiStyleVar.FramePadding,
+                    new Vector2(14f, 10f)))
+            using (ImRaii.PushColor(
+                ImGuiCol.FrameBg,
+                new Vector4(0.045f, 0.06f, 0.105f, 1f))
+                .Push(
+                    ImGuiCol.FrameBgHovered,
+                    new Vector4(0.045f, 0.06f, 0.105f, 1f))
+                .Push(
+                    ImGuiCol.FrameBgActive,
+                    new Vector4(0.045f, 0.06f, 0.105f, 1f)))
             {
-                streamKeyRevealed = !streamKeyRevealed;
+                ImGui.InputText(
+                    "##streamKey",
+                    ref displayKey,
+                    256,
+                    ImGuiInputTextFlags.ReadOnly);
             }
 
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Copy key"))
+            ImGui.Dummy(new Vector2(0f, 8f));
+
+            // Reveal / Hide
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                8f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                .Push(
+                    ImGuiCol.ButtonHovered,
+                    new Vector4(0.075f, 0.095f, 0.15f, 1f))
+                .Push(
+                    ImGuiCol.ButtonActive,
+                    new Vector4(0.075f, 0.095f, 0.15f, 1f)))
             {
-                ImGui.SetClipboardText(cachedKey);
+                var buttonPos =
+                    ImGui.GetCursorScreenPos();
+
+                var buttonSize =
+                    new Vector2(110f, 34f);
+
+                if (ImGui.Button(
+                    "##toggleStreamKey",
+                    buttonSize))
+                {
+                    streamKeyRevealed =
+                        !streamKeyRevealed;
+                }
+
+                DrawPlayerActionButtonContent(
+                    buttonPos,
+                    buttonSize,
+                    streamKeyRevealed
+                        ? FontAwesomeIcon.EyeSlash
+                        : FontAwesomeIcon.Eye,
+                    streamKeyRevealed
+                        ? "Hide"
+                        : "Reveal",
+                    Vector4.One);
             }
 
-            ImGui.SameLine();
+            ImGui.SameLine(0f, 8f);
+
+            // Copy key
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                8f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                .Push(
+                    ImGuiCol.ButtonHovered,
+                    new Vector4(0.075f, 0.095f, 0.15f, 1f))
+                .Push(
+                    ImGuiCol.ButtonActive,
+                    new Vector4(0.075f, 0.095f, 0.15f, 1f)))
+            {
+                var buttonPos =
+                    ImGui.GetCursorScreenPos();
+
+                var buttonSize =
+                    new Vector2(118f, 34f);
+
+                if (ImGui.Button(
+                    "##copyStreamKey",
+                    buttonSize))
+                {
+                    ImGui.SetClipboardText(
+                        cachedKey);
+                }
+
+                DrawPlayerActionButtonContent(
+                    buttonPos,
+                    buttonSize,
+                    FontAwesomeIcon.Copy,
+                    "Copy key",
+                    Vector4.One);
+            }
+
+            ImGui.SameLine(0f, 8f);
         }
 
+        // Generate / Regenerate
         using (ImRaii.Disabled(keyRotating))
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            8f))
+        using (ImRaii.PushColor(
+            ImGuiCol.Button,
+            new Vector4(0.055f, 0.07f, 0.115f, 1f))
+            .Push(
+                ImGuiCol.ButtonHovered,
+                new Vector4(0.075f, 0.095f, 0.15f, 1f))
+            .Push(
+                ImGuiCol.ButtonActive,
+                new Vector4(0.075f, 0.095f, 0.15f, 1f)))
         {
-            if (ImGui.SmallButton(cachedKey is null ? "Generate" : "Regenerate"))
+            var buttonPos =
+                ImGui.GetCursorScreenPos();
+
+            var buttonSize =
+                new Vector2(142f, 34f);
+
+            if (ImGui.Button(
+                "##regenerateStreamKey",
+                buttonSize))
             {
                 if (cachedKey is null)
                 {
@@ -116,60 +455,211 @@ internal sealed partial class MainWindow
                 }
                 else
                 {
-                    keyRegenerateConfirmPending = true;
+                    keyRegenerateConfirmPending =
+                        true;
                 }
             }
+
+            DrawPlayerActionButtonContent(
+                buttonPos,
+                buttonSize,
+                FontAwesomeIcon.SyncAlt,
+                cachedKey is null
+                    ? "Generate"
+                    : "Regenerate",
+                Vector4.One);
         }
 
+        // Regenerate confirmation
         if (keyRegenerateConfirmPending)
         {
-            ImGui.TextColored(Danger, "This disconnects any OBS session using the old key. Continue?");
-            if (ImGui.SmallButton("Yes, regenerate"))
+            ImGui.Dummy(
+                new Vector2(0f, 10f));
+
+            ImGui.TextColored(
+                Danger,
+                "Regenerating disconnects OBS sessions using the old key. Continue?");
+
+            ImGui.Dummy(
+                new Vector2(0f, 6f));
+
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                7f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                Danger))
             {
-                keyRegenerateConfirmPending = false;
-                RotateStreamKey(session);
+                if (ImGui.Button(
+                    "Yes, regenerate"))
+                {
+                    keyRegenerateConfirmPending =
+                        false;
+
+                    RotateStreamKey(session);
+                }
             }
 
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Cancel"))
+            ImGui.SameLine(0f, 8f);
+
+            if (ImGui.Button("Cancel"))
             {
-                keyRegenerateConfirmPending = false;
+                keyRegenerateConfirmPending =
+                    false;
             }
         }
 
         if (keyError is { Length: > 0 } error)
         {
-            ImGui.TextColored(Danger, error);
+            ImGui.Dummy(
+                new Vector2(0f, 8f));
+
+            ImGui.TextColored(
+                Danger,
+                error);
         }
 
-        ImGui.Spacing();
-        ImGui.Spacing();
-        ImGui.TextUnformatted($"Friends live ({friendsLive.Length})");
-        ImGui.Spacing();
+        ImGui.Dummy(
+            new Vector2(0f, 22f));
+
+        // ---------------------------------------------------------
+        // Friends live
+        // ---------------------------------------------------------
+
+        ImGui.SetWindowFontScale(1.08f);
+
+        ImGui.TextColored(
+            Vector4.One,
+            $"Friends live ({friendsLive.Length})");
+
+        ImGui.SetWindowFontScale(1f);
+
+        ImGui.Dummy(
+            new Vector2(0f, 8f));
+
         if (friendsLive.Length == 0)
         {
-            DrawPlainEmpty("Nobody you know is live.");
+            ImGui.SetWindowFontScale(0.88f);
+
+            ImGui.TextColored(
+                MutedText,
+                "Nobody you know is live.");
+
+            ImGui.SetWindowFontScale(1f);
+
             return;
         }
 
         foreach (var friend in friendsLive)
         {
-            ImGui.PushID(friend.AccountId);
-            using (ImRaii.PushFont(UiBuilder.IconFont))
-            {
-                ImGui.TextColored(Good, FontAwesomeIcon.Circle.ToIconString());
-            }
+            ImGui.PushID(
+                friend.AccountId);
 
-            ImGui.SameLine();
-            ImGui.TextUnformatted(friend.DisplayName);
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Watch"))
+            const float rowHeight = 58f;
+
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.ChildRounding,
+                8f))
+            using (ImRaii.PushColor(
+                ImGuiCol.ChildBg,
+                new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+            using (var row = ImRaii.Child(
+                $"##friendLive_{friend.AccountId}",
+                new Vector2(-6f, rowHeight),
+                false,
+                ImGuiWindowFlags.NoScrollbar |
+                ImGuiWindowFlags.NoScrollWithMouse))
             {
-                queue.PlayNow(new VideoQueueEntry(friend.HlsUrl, $"{friend.DisplayName}'s stream", "Live", null, null));
-                currentPage = HomePage.Player;
+                if (row)
+                {
+                    var origin =
+                        ImGui.GetCursorScreenPos();
+
+                    // Live dot
+                    using (ImRaii.PushFont(
+                        UiBuilder.IconFont))
+                    {
+                        ImGui.GetWindowDrawList()
+                            .AddText(
+                                origin +
+                                new Vector2(14f, 21f),
+                                ImGui.GetColorU32(Good),
+                                FontAwesomeIcon.Circle
+                                    .ToIconString());
+                    }
+
+                    // Friend name
+                    ImGui.GetWindowDrawList()
+                        .AddText(
+                            origin +
+                            new Vector2(38f, 20f),
+                            ImGui.GetColorU32(
+                                Vector4.One),
+                            friend.DisplayName);
+
+                    // Watch button
+                    var watchSize =
+                        new Vector2(104f, 34f);
+
+                    var watchPos =
+                        new Vector2(
+                            origin.X +
+                            ImGui.GetWindowWidth() -
+                            116f,
+                            origin.Y +
+                            (rowHeight -
+                             watchSize.Y) *
+                            0.5f);
+
+                    ImGui.SetCursorScreenPos(
+                        watchPos);
+
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.Button,
+                        Accent)
+                        .Push(
+                            ImGuiCol.ButtonHovered,
+                            AccentHover)
+                        .Push(
+                            ImGuiCol.ButtonActive,
+                            AccentActive))
+                    {
+                        var buttonPos =
+                            ImGui.GetCursorScreenPos();
+
+                        if (ImGui.Button(
+                            $"##watch_{friend.AccountId}",
+                            watchSize))
+                        {
+                            queue.PlayNow(
+                                new VideoQueueEntry(
+                                    friend.HlsUrl,
+                                    $"{friend.DisplayName}'s stream",
+                                    "Live",
+                                    null,
+                                    null));
+
+                            currentPage =
+                                HomePage.Player;
+                        }
+
+                        DrawPlayerActionButtonContent(
+                            buttonPos,
+                            watchSize,
+                            FontAwesomeIcon.Play,
+                            "Watch",
+                            Vector4.One);
+                    }
+                }
             }
 
             ImGui.PopID();
+
+            ImGui.Dummy(
+                new Vector2(0f, 8f));
         }
     }
 

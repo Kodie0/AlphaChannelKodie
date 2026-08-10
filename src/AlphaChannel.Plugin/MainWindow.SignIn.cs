@@ -55,167 +55,522 @@ internal sealed partial class MainWindow
     private bool profileSaving;
     private string? profileError;
 
+    private enum ProfileAvatarMode
+    {
+        Image,
+        Icon,
+    }
+
+    private ProfileAvatarMode profileAvatarMode = ProfileAvatarMode.Icon;
+
     private void DrawAccountSettings()
     {
         if (CurrentSession is { } session)
         {
-            // Syncs the input once per session change rather than every frame, so typing isn't
-            // fought by a field that keeps resetting to the server value mid-edit.
+            // Sync once per session change so editing isn't reset every frame.
             if (lastDisplayNameSyncedFor != session.AccountId)
             {
                 displayNameInput = session.DisplayName;
                 lastDisplayNameSyncedFor = session.AccountId;
             }
 
-            ImGui.TextColored(Good, $"Signed in as {session.DisplayName} (@{session.Handle})");
+            var displayNameValid =
+                DisplayNameRules.IsValid(displayNameInput);
 
-            // DisplayName still equals the random Handle means onboarding never actually finished
-            // (dismissed early, or the modal closed for some other reason) - friends have no
-            // memorable name to search for until this is fixed, and it's otherwise a silent trap
-            // (the account works fine for everything except being findable).
+            // ---------------------------------------------------------
+            // Account card
+            // ---------------------------------------------------------
+
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.ChildRounding,
+                10f))
+            using (ImRaii.PushColor(
+                ImGuiCol.ChildBg,
+                new Vector4(0.045f, 0.06f, 0.10f, 1f)))
+            using (var accountCard = ImRaii.Child(
+                "##accountSettingsCard",
+                new Vector2(-1f, 238f),
+                false,
+                ImGuiWindowFlags.NoScrollbar |
+                ImGuiWindowFlags.NoScrollWithMouse))
+            {
+                if (accountCard)
+                {
+                    // -------------------------------------------------
+                    // Signed-in status
+                    // -------------------------------------------------
+
+                    ImGui.SetCursorPos(
+                        new Vector2(16f, 14f));
+
+                    ImGui.TextColored(
+                        Good,
+                        "SIGNED IN");
+
+                    ImGui.SetCursorPos(
+                        new Vector2(16f, 39f));
+
+                    ImGui.TextColored(
+                        Vector4.One,
+                        session.DisplayName);
+
+                    ImGui.SameLine(0f, 7f);
+
+                    ImGui.SetWindowFontScale(0.82f);
+
+                    ImGui.TextColored(
+                        MutedText,
+                        $"@{session.Handle}");
+
+                    ImGui.SetWindowFontScale(1f);
+
+                    // -------------------------------------------------
+                    // Display name
+                    // -------------------------------------------------
+
+                    ImGui.SetCursorPos(
+                        new Vector2(16f, 70f));
+
+                    ImGui.SetWindowFontScale(0.80f);
+
+                    ImGui.TextColored(
+                        MutedText,
+                        "Display name");
+
+                    ImGui.SetWindowFontScale(1f);
+
+                    ImGui.SetCursorPos(
+                        new Vector2(16f, 91f));
+
+                    ImGui.SetNextItemWidth(
+                        ImGui.GetWindowWidth() - 126f);
+
+                    using (displayNameValid
+                               ? default
+                               : ImRaii.PushColor(
+                                   ImGuiCol.Text,
+                                   Danger))
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f)
+                        .Push(
+                            ImGuiStyleVar.FramePadding,
+                            new Vector2(12f, 8f)))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.FrameBg,
+                        new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                        .Push(
+                            ImGuiCol.FrameBgHovered,
+                            new Vector4(0.07f, 0.09f, 0.145f, 1f))
+                        .Push(
+                            ImGuiCol.FrameBgActive,
+                            new Vector4(0.07f, 0.09f, 0.145f, 1f)))
+                    {
+                        ImGui.InputText(
+                            "##displayName",
+                            ref displayNameInput,
+                            DisplayNameRules.MaxLength);
+                    }
+
+                    ImGui.SameLine(0f, 8f);
+
+                    using (ImRaii.Disabled(
+                        !displayNameValid ||
+                        displayNameInput.Trim() == session.DisplayName))
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.Button,
+                        Accent)
+                        .Push(
+                            ImGuiCol.ButtonHovered,
+                            AccentHover)
+                        .Push(
+                            ImGuiCol.ButtonActive,
+                            AccentActive))
+                    {
+                        if (ImGui.Button(
+                            "Save",
+                            new Vector2(86f, 34f)))
+                        {
+                            var token =
+                                session.Token;
+
+                            var newName =
+                                displayNameInput.Trim();
+
+                            _ = Task.Run(async () =>
+                            {
+                                var outcome =
+                                    await authClient
+                                        .UpdateDisplayNameAsync(
+                                            token,
+                                            newName);
+
+                                if (outcome.Account is { } updated)
+                                {
+                                    session.DisplayName =
+                                        updated.DisplayName;
+
+                                    onSessionChanged(
+                                        session);
+
+                                    displayNameError =
+                                        null;
+                                }
+                                else
+                                {
+                                    displayNameError =
+                                        outcome.NameTaken
+                                            ? "That name's already taken - try another."
+                                            : outcome.InvalidFormat
+                                                ? "That name doesn't fit the rules below."
+                                                : "Couldn't save that name.";
+                                }
+                            });
+                        }
+                    }
+
+                    ImGui.SetCursorPos(
+                        new Vector2(16f, 130f));
+
+                    ImGui.SetWindowFontScale(0.76f);
+
+                    ImGui.TextColored(
+                        MutedText,
+                        $"{DisplayNameRules.MinLength}-{DisplayNameRules.MaxLength} characters  •  letters, numbers, spaces, _ or -");
+
+                    ImGui.SetWindowFontScale(1f);
+
+                    // -------------------------------------------------
+                    // Invite code
+                    // -------------------------------------------------
+
+                    ImGui.SetCursorPos(
+                        new Vector2(16f, 158f));
+
+                    ImGui.SetWindowFontScale(0.80f);
+
+                    ImGui.TextColored(
+                        MutedText,
+                        "Invite code");
+
+                    ImGui.SetWindowFontScale(1f);
+
+                    var inviteCodeDisplay =
+                        session.InviteCode;
+
+                    ImGui.SetCursorPos(
+                        new Vector2(16f, 179f));
+
+                    ImGui.SetNextItemWidth(130f);
+
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f)
+                        .Push(
+                            ImGuiStyleVar.FramePadding,
+                            new Vector2(12f, 8f)))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.FrameBg,
+                        new Vector4(0.055f, 0.07f, 0.115f, 1f)))
+                    {
+                        ImGui.InputText(
+                            "##inviteCode",
+                            ref inviteCodeDisplay,
+                            16,
+                            ImGuiInputTextFlags.ReadOnly);
+                    }
+
+                    ImGui.SameLine(0f, 8f);
+
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.Button,
+                        new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                        .Push(
+                            ImGuiCol.ButtonHovered,
+                            new Vector4(0.075f, 0.095f, 0.15f, 1f))
+                        .Push(
+                            ImGuiCol.ButtonActive,
+                            new Vector4(0.075f, 0.095f, 0.15f, 1f)))
+                    {
+                        if (ImGui.Button(
+                            "Copy",
+                            new Vector2(76f, 34f)))
+                        {
+                            ImGui.SetClipboardText(
+                                session.InviteCode);
+                        }
+                    }
+
+                    ImGui.SameLine(0f, 8f);
+
+                    using (ImRaii.Disabled(
+                        inviteCodeRefreshing))
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.FrameRounding,
+                        8f))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.Button,
+                        new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                        .Push(
+                            ImGuiCol.ButtonHovered,
+                            new Vector4(0.075f, 0.095f, 0.15f, 1f))
+                        .Push(
+                            ImGuiCol.ButtonActive,
+                            new Vector4(0.075f, 0.095f, 0.15f, 1f)))
+                    {
+                        if (ImGui.Button(
+                            inviteCodeRefreshing
+                                ? "..."
+                                : "Refresh",
+                            new Vector2(82f, 34f)))
+                        {
+                            inviteCodeRefreshing =
+                                true;
+
+                            var token =
+                                session.Token;
+
+                            _ = Task.Run(async () =>
+                            {
+                                var summary =
+                                    await authClient
+                                        .GetMeAsync(token);
+
+                                inviteCodeRefreshing =
+                                    false;
+
+                                if (summary is not null)
+                                {
+                                    session.InviteCode =
+                                        summary.InviteCode;
+
+                                    session.AvatarIcon =
+                                        summary.AvatarIcon;
+
+                                    session.AvatarColorHex =
+                                        summary.AvatarColorHex;
+
+                                    session.AvatarImageUrl =
+                                        summary.AvatarImageUrl;
+
+                                    session.Bio =
+                                        summary.Bio;
+
+                                    session.StatusMessage =
+                                        summary.StatusMessage;
+
+                                    onSessionChanged(
+                                        session);
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+
+            // ---------------------------------------------------------
+            // Errors / warnings
+            // ---------------------------------------------------------
+
             if (session.DisplayName == session.Handle)
             {
-                ImGui.TextColored(Danger, "You haven't picked a name yet - friends can't find or add you until you do. Set one below.");
+                ImGui.Dummy(
+                    new Vector2(0f, 7f));
+
+                ImGui.TextColored(
+                    Danger,
+                    "Pick a display name so friends can find and add you.");
             }
 
-            var displayNameValid = DisplayNameRules.IsValid(displayNameInput);
-            using (displayNameValid ? default : ImRaii.PushColor(ImGuiCol.Text, Danger))
-            {
-                ImGui.SetNextItemWidth(200f);
-                ImGui.InputText("##displayName", ref displayNameInput, DisplayNameRules.MaxLength);
-            }
-
-            ImGui.SameLine();
-            using (ImRaii.Disabled(!displayNameValid || displayNameInput.Trim() == session.DisplayName))
-            {
-                if (ImGui.SmallButton("Save name"))
-                {
-                    var token = session.Token;
-                    var newName = displayNameInput.Trim();
-                    _ = Task.Run(async () =>
-                    {
-                        var outcome = await authClient.UpdateDisplayNameAsync(token, newName);
-                        if (outcome.Account is { } updated)
-                        {
-                            session.DisplayName = updated.DisplayName;
-                            onSessionChanged(session);
-                            displayNameError = null;
-                        }
-                        else
-                        {
-                            displayNameError = outcome.NameTaken
-                                ? "That name's already taken - try another."
-                                : outcome.InvalidFormat
-                                    ? "That name doesn't fit the rules below."
-                                    : "Couldn't save that name.";
-                        }
-                    });
-                }
-            }
-
-            ImGui.TextColored(MutedText,
-                $"{DisplayNameRules.MinLength}-{DisplayNameRules.MaxLength} characters: letters, numbers, single spaces, _ or -.");
             if (displayNameError is { Length: > 0 } nameError)
             {
-                ImGui.TextColored(Danger, nameError);
+                ImGui.Dummy(
+                    new Vector2(0f, 6f));
+
+                ImGui.TextColored(
+                    Danger,
+                    nameError);
             }
 
-            ImGui.Spacing();
-            ImGui.TextColored(MutedText, "Your invite code - share it (Discord, voice chat) and whoever redeems it becomes an instant friend, no name search needed:");
-            var inviteCodeDisplay = session.InviteCode;
-            ImGui.SetNextItemWidth(120f);
-            ImGui.InputText("##inviteCode", ref inviteCodeDisplay, 16, ImGuiInputTextFlags.ReadOnly);
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Copy code"))
-            {
-                ImGui.SetClipboardText(session.InviteCode);
-            }
+            ImGui.Dummy(
+                new Vector2(0f, 8f));
 
-            ImGui.SameLine();
-            using (ImRaii.Disabled(inviteCodeRefreshing))
+            ImGui.SetWindowFontScale(0.78f);
+
+            ImGui.TextColored(
+                MutedText,
+                "Invite codes rotate automatically after they're redeemed.");
+
+            ImGui.SetWindowFontScale(1f);
+
+            ImGui.Dummy(
+                new Vector2(0f, 10f));
+
+            // ---------------------------------------------------------
+            // Account actions
+            // ---------------------------------------------------------
+
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                8f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                new Vector4(0.055f, 0.07f, 0.115f, 1f))
+                .Push(
+                    ImGuiCol.ButtonHovered,
+                    new Vector4(0.075f, 0.095f, 0.15f, 1f))
+                .Push(
+                    ImGuiCol.ButtonActive,
+                    new Vector4(0.075f, 0.095f, 0.15f, 1f)))
             {
-                if (ImGui.SmallButton("Refresh"))
+                if (ImGui.Button(
+                    "Show linked characters",
+                    new Vector2(160f, 34f)))
                 {
-                    inviteCodeRefreshing = true;
-                    var token = session.Token;
-                    _ = Task.Run(async () =>
-                    {
-                        var summary = await authClient.GetMeAsync(token);
-                        inviteCodeRefreshing = false;
-                        if (summary is not null)
-                        {
-                            session.InviteCode = summary.InviteCode;
-                            session.AvatarIcon = summary.AvatarIcon;
-                            session.AvatarColorHex = summary.AvatarColorHex;
-                            session.AvatarImageUrl = summary.AvatarImageUrl;
-                            session.Bio = summary.Bio;
-                            session.StatusMessage = summary.StatusMessage;
-                            onSessionChanged(session);
-                        }
-                    });
+                    var token =
+                        session.Token;
+
+                    _ = Task.Run(
+                        async () =>
+                            myLinkedCharacters =
+                                await authClient
+                                    .GetMyCharactersAsync(
+                                        token));
                 }
             }
 
-            ImGui.TextColored(MutedText, "Rotates automatically each time someone redeems it, so an old shared copy stops working - hit Refresh to see the current one.");
+            ImGui.SameLine(0f, 8f);
 
-            if (ImGui.Button("Sign out"))
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                8f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                new Vector4(0.16f, 0.055f, 0.07f, 1f))
+                .Push(
+                    ImGuiCol.ButtonHovered,
+                    new Vector4(0.22f, 0.07f, 0.09f, 1f))
+                .Push(
+                    ImGuiCol.ButtonActive,
+                    new Vector4(0.25f, 0.08f, 0.10f, 1f)))
             {
-                _ = authClient.RevokeAsync(session.Token);
-                onSessionChanged(null);
+                if (ImGui.Button(
+                    "Sign out",
+                    new Vector2(94f, 34f)))
+                {
+                    _ = authClient.RevokeAsync(
+                        session.Token);
+
+                    onSessionChanged(
+                        null);
+                }
             }
 
-            ImGui.SameLine();
-            if (ImGui.SmallButton("Show linked characters"))
-            {
-                var token = session.Token;
-                _ = Task.Run(async () => myLinkedCharacters = await authClient.GetMyCharactersAsync(token));
-            }
+            // ---------------------------------------------------------
+            // Linked characters
+            // ---------------------------------------------------------
 
             if (myLinkedCharacters is { } characters)
             {
+                ImGui.Dummy(
+                    new Vector2(0f, 10f));
+
                 foreach (var character in characters)
                 {
-                    ImGui.BulletText($"{character.CharacterName} @ {character.World}" + (character.IsPrimary ? " (primary)" : ""));
+                    ImGui.TextColored(
+                        MutedText,
+                        $"{character.CharacterName} @ {character.World}" +
+                        (character.IsPrimary
+                            ? "  •  Primary"
+                            : string.Empty));
                 }
             }
 
-            ImGui.Spacing();
-            ImGui.Separator();
-            ImGui.Spacing();
-            DrawProfileEditor(session);
+            
         }
         else
         {
-            ImGui.TextColored(MutedText, "Sign in to use Friends, Messages, Activity, and Watch-along.");
+            // ---------------------------------------------------------
+            // Signed-out state
+            // ---------------------------------------------------------
 
-            var canSignIn = !string.IsNullOrEmpty(CurrentCharacterName) && !string.IsNullOrEmpty(CurrentWorldName);
-            using (ImRaii.Disabled(!canSignIn || signInState is SignInState.Requesting or SignInState.AwaitingBrowser))
+            ImGui.TextColored(
+                MutedText,
+                "Sign in to use Friends, Messages, Activity, and Watch-along.");
+
+            ImGui.Dummy(
+                new Vector2(0f, 10f));
+
+            var canSignIn =
+                !string.IsNullOrEmpty(CurrentCharacterName) &&
+                !string.IsNullOrEmpty(CurrentWorldName);
+
+            using (ImRaii.Disabled(
+                !canSignIn ||
+                signInState is
+                    SignInState.Requesting or
+                    SignInState.AwaitingBrowser))
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FrameRounding,
+                8f))
+            using (ImRaii.PushColor(
+                ImGuiCol.Button,
+                Accent)
+                .Push(
+                    ImGuiCol.ButtonHovered,
+                    AccentHover)
+                .Push(
+                    ImGuiCol.ButtonActive,
+                    AccentActive))
             {
-                if (ImGui.Button("Sign in with XIVAuth"))
+                if (ImGui.Button(
+                    "Sign in with XIVAuth",
+                    new Vector2(160f, 36f)))
                 {
-                    StartSignIn(linkUsing: null);
+                    StartSignIn(
+                        linkUsing: null);
                 }
             }
 
-            // Offers to link this (not-yet-signed-in) character onto an account already
-            // established on a different character on this install, rather than making a second
-            // account - see Auth/AccountService's FindOrCreateAccountForCharacterAsync.
-            if (Plugin.Cfg.CharacterSessions.Values.FirstOrDefault() is { } existing)
+            if (Plugin.Cfg.CharacterSessions.Values
+                .FirstOrDefault() is { } existing)
             {
-                ImGui.SameLine();
-                using (ImRaii.Disabled(signInState is SignInState.Requesting or SignInState.AwaitingBrowser))
+                ImGui.SameLine(0f, 8f);
+
+                using (ImRaii.Disabled(
+                    signInState is
+                        SignInState.Requesting or
+                        SignInState.AwaitingBrowser))
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.FrameRounding,
+                    8f))
                 {
-                    if (ImGui.Button($"Link to @{existing.Handle}"))
+                    if (ImGui.Button(
+                        $"Link to @{existing.Handle}",
+                        new Vector2(150f, 36f)))
                     {
-                        StartSignIn(existing);
+                        StartSignIn(
+                            existing);
                     }
                 }
             }
         }
 
-        if (signInState == SignInState.Failed && signInStatusMessage is { Length: > 0 } failure)
+        if (signInState == SignInState.Failed &&
+            signInStatusMessage is { Length: > 0 } failure)
         {
-            ImGui.TextColored(Danger, failure);
+            ImGui.Dummy(
+                new Vector2(0f, 8f));
+
+            ImGui.TextColored(
+                Danger,
+                failure);
         }
     }
 
@@ -230,84 +585,654 @@ internal sealed partial class MainWindow
             profileAvatarError = null;
             profileBioInput = session.Bio ?? string.Empty;
             profileStatusInput = session.StatusMessage ?? string.Empty;
+
+            profileAvatarMode =
+                string.IsNullOrEmpty(session.AvatarImageUrl)
+                    ? ProfileAvatarMode.Icon
+                    : ProfileAvatarMode.Image;
+
             lastProfileSyncedFor = session.AccountId;
         }
 
-        SectionHeader("Profile");
-        DrawAvatarChip(profileIconInput, profileColorInput, 56, profileImageUrl);
-        ImGui.SameLine();
-        ImGui.BeginGroup();
-        ImGui.TextColored(MutedText, "Shown next to your name everywhere - Friends, Alpha Chat, Tweeter.");
-        if (profileImageUrl is { Length: > 0 })
-        {
-            ImGui.TextColored(Good, "Custom picture active.");
-        }
-        else
-        {
-            ImGui.TextColored(new Vector4(MutedText.X, MutedText.Y, MutedText.Z, 0.85f),
-                "png / jpg / webp · up to 1 MB");
-        }
+        // =========================================================
+        // PROFILE PICTURE
+        // =========================================================
 
-        ImGui.EndGroup();
+        var pictureCardHeight =
+            profileAvatarMode == ProfileAvatarMode.Image
+                ? 410f
+                : 760f;
 
-        ImGui.Spacing();
-        ImGui.TextColored(MutedText, "Custom picture");
-        using (ImRaii.Disabled(profileAvatarBusy))
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.ChildRounding,
+            10f)
+            .Push(
+                ImGuiStyleVar.WindowPadding,
+                new Vector2(20f, 18f)))
+        using (ImRaii.PushColor(
+            ImGuiCol.ChildBg,
+            new Vector4(0.045f, 0.06f, 0.10f, 1f))
+            .Push(
+                ImGuiCol.Border,
+                BorderSubtle))
+        using (var pictureCard = ImRaii.Child(
+            "##profilePictureCard",
+            new Vector2(-1f, pictureCardHeight),
+            true,
+            ImGuiWindowFlags.NoScrollbar |
+            ImGuiWindowFlags.NoScrollWithMouse))
         {
-            if (DrawProfileActionButton(FontAwesomeIcon.FolderOpen, "Downloads", "Newest image", Accent))
+            if (pictureCard)
             {
-                var found = FindImageInDownloads();
-                if (found is null)
+                // -----------------------------------------------------
+                // Heading
+                // -----------------------------------------------------
+
+                ImGui.SetWindowFontScale(1.10f);
+
+                ImGui.TextColored(
+                    Vector4.One,
+                    "Profile picture");
+
+                ImGui.SetWindowFontScale(1f);
+
+                ImGui.Dummy(new Vector2(0f, 3f));
+
+                ImGui.TextColored(
+                    MutedText,
+                    "Choose an image or a styled icon.");
+
+                ImGui.Dummy(new Vector2(0f, 14f));
+
+                // -----------------------------------------------------
+                // Image / Icon selector
+                // -----------------------------------------------------
+
+                const float selectorWidth = 132f;
+                const float selectorHeight = 38f;
+
+                DrawProfileModeButton(
+                    ProfileAvatarMode.Image,
+                    FontAwesomeIcon.Image,
+                    "Image",
+                    selectorWidth,
+                    selectorHeight);
+
+                ImGui.SameLine(0f, 10f);
+
+                DrawProfileModeButton(
+                    ProfileAvatarMode.Icon,
+                    FontAwesomeIcon.Smile,
+                    "Icon",
+                    selectorWidth,
+                    selectorHeight);
+
+                ImGui.Dummy(new Vector2(0f, 16f));
+
+                // -----------------------------------------------------
+                // Divider
+                // -----------------------------------------------------
+
+                var dividerOrigin =
+                    ImGui.GetCursorScreenPos();
+
+                var dividerWidth =
+                    ImGui.GetContentRegionAvail().X;
+
+                ImGui.GetWindowDrawList()
+                    .AddRectFilled(
+                        dividerOrigin,
+                        dividerOrigin +
+                        new Vector2(dividerWidth, 1f),
+                        ImGui.GetColorU32(BorderSubtle));
+
+                ImGui.Dummy(
+                    new Vector2(dividerWidth, 16f));
+
+                // =====================================================
+                // IMAGE MODE
+                // =====================================================
+
+                if (profileAvatarMode == ProfileAvatarMode.Image)
                 {
-                    profileAvatarError = "No image found in Downloads.";
+                    DrawAvatarChip(
+                        profileIconInput,
+                        profileColorInput,
+                        96,
+                        profileImageUrl);
+
+                    ImGui.SameLine(0f, 18f);
+
+                    ImGui.BeginGroup();
+
+                    ImGui.SetWindowFontScale(1.05f);
+
+                    ImGui.TextColored(
+                        Vector4.One,
+                        "Current image");
+
+                    ImGui.SetWindowFontScale(1f);
+
+                    ImGui.Dummy(new Vector2(0f, 5f));
+
+                    if (profileImageUrl is { Length: > 0 })
+                    {
+                        ImGui.TextColored(
+                            MutedText,
+                            "Custom profile image");
+
+                        ImGui.Dummy(new Vector2(0f, 7f));
+
+                        ImGui.TextColored(
+                            Good,
+                            "Custom picture active.");
+                    }
+                    else
+                    {
+                        ImGui.TextColored(
+                            MutedText,
+                            "No custom image selected.");
+
+                        ImGui.Dummy(new Vector2(0f, 7f));
+
+                        ImGui.TextColored(
+                            MutedText,
+                            "Upload an image below to use one.");
+                    }
+
+                    ImGui.EndGroup();
+
+                    ImGui.Dummy(new Vector2(0f, 18f));
+
+                    // -------------------------------------------------
+                    // Image actions
+                    // -------------------------------------------------
+
+                    const float actionGap = 10f;
+                    const float horizontalInset = 8f;
+
+                    var fullActionWidth =
+                        ImGui.GetContentRegionAvail().X;
+
+                    var actionWidth =
+                        (fullActionWidth -
+                         (horizontalInset * 2f) -
+                         (actionGap * 2f)) / 3f;
+
+                    ImGui.SetCursorPosX(
+                        ImGui.GetCursorPosX() +
+                        horizontalInset);
+
+                    using (ImRaii.Disabled(profileAvatarBusy))
+                    {
+                        if (DrawProfileActionButton(
+                            FontAwesomeIcon.FolderOpen,
+                            "Newest image",
+                            "In Downloads",
+                            Accent,
+                            width: actionWidth))
+                        {
+                            var found =
+                                FindImageInDownloads();
+
+                            if (found is null)
+                            {
+                                profileAvatarError =
+                                    "No image found in Downloads.";
+                            }
+                            else
+                            {
+                                profileAvatarPathInput =
+                                    found;
+
+                                UploadProfileAvatar(
+                                    session,
+                                    found);
+                            }
+                        }
+
+                        ImGui.SameLine(0f, actionGap);
+
+                        if (DrawProfileActionButton(
+                            FontAwesomeIcon.Upload,
+                            "Upload image",
+                            "Choose a file",
+                            Hex(0x38BDF8),
+                            width: actionWidth))
+                        {
+                            ImGui.OpenPopup(
+                                "Upload picture##profileAvatarPath");
+                        }
+
+                        ImGui.SameLine(0f, actionGap);
+
+                        if (DrawProfileActionButton(
+                            FontAwesomeIcon.Trash,
+                            "Remove image",
+                            "Revert to icon",
+                            Hex(0xF87171),
+                            disabled:
+                                string.IsNullOrEmpty(profileImageUrl),
+                            width: actionWidth))
+                        {
+                            ClearProfileAvatar(session);
+
+                            profileAvatarMode =
+                                ProfileAvatarMode.Icon;
+                        }
+                    }
+
+                    DrawProfileAvatarPathPopup(session);
+
+                    ImGui.Dummy(new Vector2(0f, 14f));
+
+                    ImGui.SetWindowFontScale(0.78f);
+
+                    ImGui.TextColored(
+                        MutedText,
+                        "Recommended: square PNG, JPG or WebP. Max 1 MB.");
+
+                    ImGui.SetWindowFontScale(1f);
+
+                    if (profileAvatarError is { Length: > 0 } avatarError)
+                    {
+                        ImGui.Dummy(new Vector2(0f, 7f));
+
+                        ImGui.TextColored(
+                            Danger,
+                            avatarError);
+                    }
                 }
+
+                // =====================================================
+                // ICON MODE
+                // =====================================================
+
                 else
                 {
-                    profileAvatarPathInput = found;
-                    UploadProfileAvatar(session, found);
+                    DrawAvatarChip(
+                        profileIconInput,
+                        profileColorInput,
+                        96,
+                        null);
+
+                    ImGui.SameLine(0f, 18f);
+
+                    ImGui.BeginGroup();
+
+                    ImGui.SetWindowFontScale(1.05f);
+
+                    ImGui.TextColored(
+                        Vector4.One,
+                        "Styled icon");
+
+                    ImGui.SetWindowFontScale(1f);
+
+                    ImGui.Dummy(new Vector2(0f, 5f));
+
+                    ImGui.TextColored(
+                        MutedText,
+                        "Choose an icon and colour for your avatar.");
+
+                    if (profileImageUrl is { Length: > 0 })
+                    {
+                        ImGui.Dummy(new Vector2(0f, 7f));
+
+                        ImGui.TextColored(
+                            MutedText,
+                            "Your custom image is currently active.");
+
+                        ImGui.Dummy(new Vector2(0f, 8f));
+
+                        using (ImRaii.Disabled(profileAvatarBusy))
+                        using (ImRaii.PushStyle(
+                            ImGuiStyleVar.FrameRounding,
+                            7f))
+                        using (ImRaii.PushColor(
+                            ImGuiCol.Button,
+                            new Vector4(
+                                0.055f,
+                                0.07f,
+                                0.115f,
+                                1f))
+                            .Push(
+                                ImGuiCol.ButtonHovered,
+                                new Vector4(
+                                    0.075f,
+                                    0.095f,
+                                    0.15f,
+                                    1f)))
+                        {
+                            if (ImGui.Button(
+                                "Use icon instead",
+                                new Vector2(130f, 30f)))
+                            {
+                                ClearProfileAvatar(session);
+                            }
+                        }
+                    }
+
+                    ImGui.EndGroup();
+
+                    ImGui.Dummy(new Vector2(0f, 18f));
+
+                    // -------------------------------------------------
+                    // Icon picker
+                    // -------------------------------------------------
+
+                    ImGui.TextColored(
+                        Vector4.One,
+                        "Icon");
+
+                    ImGui.Dummy(new Vector2(0f, 7f));
+
+                    using (ImRaii.PushStyle(
+    ImGuiStyleVar.ChildRounding,
+    8f)
+    .Push(
+        ImGuiStyleVar.WindowPadding,
+        new Vector2(12f, 12f)))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.ChildBg,
+                        new Vector4(
+                            0.035f,
+                            0.045f,
+                            0.075f,
+                            1f))
+                        .Push(
+                            ImGuiCol.Border,
+                            BorderSubtle))
+                    using (var iconChild = ImRaii.Child(
+                        "##profileIconPicker",
+                        new Vector2(-1f, 178f),
+                        true,
+                        ImGuiWindowFlags.NoScrollbar |
+                        ImGuiWindowFlags.NoScrollWithMouse))
+                    {
+                        if (iconChild)
+                        {
+                            DrawIconPicker(
+                                ref profileIconInput);
+                        }
+                    }
+
+                    ImGui.Dummy(new Vector2(0f, 14f));
+
+                    // -------------------------------------------------
+                    // Color
+                    // -------------------------------------------------
+
+                    ImGui.TextColored(
+                        Vector4.One,
+                        "Color");
+
+                    ImGui.Dummy(new Vector2(0f, 7f));
+
+                    // Give the colour controls their own padded area.
+                    using (ImRaii.PushStyle(
+    ImGuiStyleVar.ChildRounding,
+    8f)
+    .Push(
+        ImGuiStyleVar.WindowPadding,
+        new Vector2(14f, 14f)))
+                    using (ImRaii.PushColor(
+                        ImGuiCol.ChildBg,
+                        new Vector4(
+                            0.035f,
+                            0.045f,
+                            0.075f,
+                            1f))
+                        .Push(
+                            ImGuiCol.Border,
+                            BorderSubtle))
+                    using (var colorChild = ImRaii.Child(
+                        "##profileColorPicker",
+                        new Vector2(-1f, 78f),
+                        true,
+                        ImGuiWindowFlags.NoScrollbar |
+                        ImGuiWindowFlags.NoScrollWithMouse))
+                    {
+                        if (colorChild)
+                        {
+                            DrawColorPicker(
+                                ref profileColorInput);
+                        }
+                    }
                 }
             }
-
-            ImGui.SameLine(0, 8);
-            if (DrawProfileActionButton(FontAwesomeIcon.Upload, "Upload", "Paste a path", Hex(0x38BDF8)))
-            {
-                ImGui.OpenPopup("Upload picture##profileAvatarPath");
-            }
-
-            ImGui.SameLine(0, 8);
-            if (DrawProfileActionButton(FontAwesomeIcon.Trash, "Remove", "Use icon instead", Hex(0xF87171),
-                    disabled: string.IsNullOrEmpty(profileImageUrl)))
-            {
-                ClearProfileAvatar(session);
-            }
         }
 
-        DrawProfileAvatarPathPopup(session);
+        ImGui.Dummy(new Vector2(0f, 14f));
 
-        if (profileAvatarError is { Length: > 0 } avatarError)
+        // =========================================================
+        // ABOUT YOU
+        // =========================================================
+
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.ChildRounding,
+            10f)
+            .Push(
+                ImGuiStyleVar.WindowPadding,
+                new Vector2(20f, 18f)))
+        using (ImRaii.PushColor(
+            ImGuiCol.ChildBg,
+            new Vector4(0.045f, 0.06f, 0.10f, 1f))
+            .Push(
+                ImGuiCol.Border,
+                BorderSubtle))
+        using (var aboutCard = ImRaii.Child(
+            "##profileAboutCard",
+            new Vector2(-1f, 465f),
+            true,
+            ImGuiWindowFlags.NoScrollbar |
+            ImGuiWindowFlags.NoScrollWithMouse))
         {
-            ImGui.TextColored(Danger, avatarError);
+            if (aboutCard)
+            {
+                ImGui.SetWindowFontScale(1.10f);
+
+                ImGui.TextColored(
+                    Vector4.One,
+                    "About you");
+
+                ImGui.SetWindowFontScale(1f);
+
+                ImGui.Dummy(new Vector2(0f, 2f));
+
+                ImGui.TextColored(
+                    MutedText,
+                    "Let others know a bit about you.");
+
+                ImGui.Dummy(new Vector2(0f, 10f));
+
+                // -----------------------------------------------------
+                // Status
+                // -----------------------------------------------------
+
+                ImGui.TextColored(
+                    Vector4.One,
+                    "Status");
+
+                ImGui.SameLine();
+
+                ImGui.SetWindowFontScale(0.76f);
+
+                ImGui.TextColored(
+                    MutedText,
+                    "Short message shown beside your name.");
+
+                ImGui.SetWindowFontScale(1f);
+
+                ImGui.Dummy(new Vector2(0f, 5f));
+
+                ImGui.SetNextItemWidth(-1f);
+
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.FrameRounding,
+                    8f)
+                    .Push(
+                        ImGuiStyleVar.FramePadding,
+                        new Vector2(12f, 9f)))
+                using (ImRaii.PushColor(
+                    ImGuiCol.FrameBg,
+                    new Vector4(
+                        0.055f,
+                        0.07f,
+                        0.115f,
+                        1f))
+                    .Push(
+                        ImGuiCol.FrameBgHovered,
+                        new Vector4(
+                            0.07f,
+                            0.09f,
+                            0.145f,
+                            1f))
+                    .Push(
+                        ImGuiCol.FrameBgActive,
+                        new Vector4(
+                            0.07f,
+                            0.09f,
+                            0.145f,
+                            1f)))
+                {
+                    ImGui.InputTextWithHint(
+                        "##status",
+                        "What are you up to?",
+                        ref profileStatusInput,
+                        64);
+                }
+
+                ImGui.SetWindowFontScale(0.72f);
+
+                var statusCounter =
+                    $"{profileStatusInput.Length} / 64";
+
+                var statusCounterWidth =
+                    ImGui.CalcTextSize(statusCounter).X;
+
+                ImGui.SetCursorPosX(
+                    ImGui.GetWindowWidth() -
+                    statusCounterWidth -
+                    22f);
+
+                ImGui.TextColored(
+                    MutedText,
+                    statusCounter);
+
+                ImGui.SetWindowFontScale(1f);
+
+                ImGui.Dummy(new Vector2(0f, 9f));
+
+                // -----------------------------------------------------
+                // Bio
+                // -----------------------------------------------------
+
+                ImGui.TextColored(
+                    Vector4.One,
+                    "Bio");
+
+                ImGui.SameLine();
+
+                ImGui.SetWindowFontScale(0.76f);
+
+                ImGui.TextColored(
+                    MutedText,
+                    "A little about yourself. Shown on your profile.");
+
+                ImGui.SetWindowFontScale(1f);
+
+                ImGui.Dummy(new Vector2(0f, 5f));
+
+                using (ImRaii.PushStyle(
+                    ImGuiStyleVar.FrameRounding,
+                    8f)
+                    .Push(
+                        ImGuiStyleVar.FramePadding,
+                        new Vector2(12f, 10f)))
+                using (ImRaii.PushColor(
+                    ImGuiCol.FrameBg,
+                    new Vector4(
+                        0.055f,
+                        0.07f,
+                        0.115f,
+                        1f))
+                    .Push(
+                        ImGuiCol.FrameBgHovered,
+                        new Vector4(
+                            0.07f,
+                            0.09f,
+                            0.145f,
+                            1f))
+                    .Push(
+                        ImGuiCol.FrameBgActive,
+                        new Vector4(
+                            0.07f,
+                            0.09f,
+                            0.145f,
+                            1f)))
+                {
+                    ImGui.InputTextMultiline(
+                        "##bio",
+                        ref profileBioInput,
+                        160,
+                        new Vector2(-1f, 145f));
+                }
+
+                ImGui.SetWindowFontScale(0.72f);
+
+                var bioCounter =
+                    $"{profileBioInput.Length} / 160";
+
+                var bioCounterWidth =
+                    ImGui.CalcTextSize(bioCounter).X;
+
+                ImGui.SetCursorPosX(
+                    ImGui.GetWindowWidth() -
+                    bioCounterWidth -
+                    22f);
+
+                ImGui.TextColored(
+                    MutedText,
+                    bioCounter);
+
+                ImGui.SetWindowFontScale(1f);
+            }
         }
 
-        ImGui.Spacing();
-        ImGui.TextColored(MutedText, "Icon");
-        DrawIconPicker(ref profileIconInput);
+        ImGui.Dummy(new Vector2(0f, 14f));
 
-        ImGui.Spacing();
-        ImGui.TextColored(MutedText, "Color");
-        DrawColorPicker(ref profileColorInput);
+        // =========================================================
+        // SAVE PROFILE
+        // =========================================================
 
-        ImGui.Spacing();
-        ImGui.SetNextItemWidth(300f);
-        ImGui.InputTextWithHint("##status", "Status (e.g. \"LFG\", \"AFK\")", ref profileStatusInput, 64);
+        const float saveWidth = 138f;
 
-        ImGui.SetNextItemWidth(300f);
-        ImGui.InputTextMultiline("##bio", ref profileBioInput, 160, new Vector2(300, 60));
+        ImGui.SetCursorPosX(
+            ImGui.GetCursorPosX() +
+            ImGui.GetContentRegionAvail().X -
+            saveWidth);
 
-        ImGui.Spacing();
         using (ImRaii.Disabled(profileSaving))
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            8f))
+        using (ImRaii.PushColor(
+            ImGuiCol.Button,
+            Accent)
+            .Push(
+                ImGuiCol.ButtonHovered,
+                AccentHover)
+            .Push(
+                ImGuiCol.ButtonActive,
+                AccentActive))
         {
-            if (ImGui.Button(profileSaving ? "Saving..." : "Save profile"))
+            if (ImGui.Button(
+                profileSaving
+                    ? "Saving..."
+                    : "Save profile",
+                new Vector2(
+                    saveWidth,
+                    40f)))
             {
                 SaveProfile(session);
             }
@@ -315,62 +1240,299 @@ internal sealed partial class MainWindow
 
         if (profileError is { Length: > 0 } error)
         {
-            ImGui.TextColored(Danger, error);
+            ImGui.Dummy(new Vector2(0f, 8f));
+
+            ImGui.TextColored(
+                Danger,
+                error);
         }
     }
 
-    // Same tile language as theme / background swatches — icon disc + title + muted subtitle.
-    private static bool DrawProfileActionButton(FontAwesomeIcon icon, string title, string subtitle,
-        Vector4 color, bool disabled = false)
+    private void DrawProfileModeButton(
+    ProfileAvatarMode mode,
+    FontAwesomeIcon icon,
+    string label,
+    float width,
+    float height)
     {
-        var size = new Vector2(128, 44);
-        var origin = ImGui.GetCursorScreenPos();
-        var drawList = ImGui.GetWindowDrawList();
+        var selected =
+            profileAvatarMode == mode;
+
+        var origin =
+            ImGui.GetCursorScreenPos();
+
+        var size =
+            new Vector2(width, height);
+
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            8f))
+        using (ImRaii.PushColor(
+            ImGuiCol.Button,
+            selected
+                ? Accent
+                : new Vector4(
+                    0.035f,
+                    0.045f,
+                    0.075f,
+                    1f))
+            .Push(
+                ImGuiCol.ButtonHovered,
+                selected
+                    ? AccentHover
+                    : new Vector4(
+                        0.055f,
+                        0.07f,
+                        0.11f,
+                        1f))
+            .Push(
+                ImGuiCol.ButtonActive,
+                selected
+                    ? AccentActive
+                    : new Vector4(
+                        0.065f,
+                        0.08f,
+                        0.125f,
+                        1f))
+            .Push(
+                ImGuiCol.Text,
+                new Vector4(0f, 0f, 0f, 0f)))
+        {
+            if (ImGui.Button(
+                $"##profileMode_{mode}",
+                size))
+            {
+                profileAvatarMode = mode;
+            }
+        }
+
+        var drawList =
+            ImGui.GetWindowDrawList();
+
+        drawList.AddRect(
+            origin,
+            origin + size,
+            ImGui.GetColorU32(
+                selected
+                    ? Accent
+                    : BorderSubtle),
+            8f,
+            ImDrawFlags.None,
+            selected
+                ? 1.5f
+                : 1f);
+
+        var glyph =
+            icon.ToIconString();
+
+        Vector2 glyphSize;
+
+        using (ImRaii.PushFont(
+            UiBuilder.IconFont))
+        {
+            glyphSize =
+                ImGui.CalcTextSize(glyph);
+        }
+
+        var labelSize =
+            ImGui.CalcTextSize(label);
+
+        const float gap = 8f;
+
+        var totalWidth =
+            glyphSize.X +
+            gap +
+            labelSize.X;
+
+        var contentX =
+            origin.X +
+            (size.X - totalWidth) * 0.5f;
+
+        var glyphY =
+            origin.Y +
+            (size.Y - glyphSize.Y) * 0.5f;
+
+        var labelY =
+            origin.Y +
+            (size.Y - labelSize.Y) * 0.5f;
+
+        using (ImRaii.PushFont(
+            UiBuilder.IconFont))
+        {
+            drawList.AddText(
+                new Vector2(
+                    contentX,
+                    glyphY),
+                ImGui.GetColorU32(
+                    selected
+                        ? Vector4.One
+                        : MutedText),
+                glyph);
+        }
+
+        drawList.AddText(
+            new Vector2(
+                contentX +
+                glyphSize.X +
+                gap,
+                labelY),
+            ImGui.GetColorU32(
+                selected
+                    ? Vector4.One
+                    : MutedText),
+            label);
+    }
+
+    // Same tile language as theme / background swatches — icon disc + title + muted subtitle.
+    private static bool DrawProfileActionButton(
+    FontAwesomeIcon icon,
+    string title,
+    string subtitle,
+    Vector4 color,
+    bool disabled = false,
+    float width = 128f)
+    {
+        var size =
+            new Vector2(
+                width,
+                50f);
+
+        var origin =
+            ImGui.GetCursorScreenPos();
+
+        var drawList =
+            ImGui.GetWindowDrawList();
 
         ImGui.PushID(title);
+
         var clicked = false;
+
         using (ImRaii.Disabled(disabled))
         {
-            clicked = ImGui.InvisibleButton("##profileAction", size);
+            clicked =
+                ImGui.InvisibleButton(
+                    "##profileAction",
+                    size);
         }
 
-        var hovered = ImGui.IsItemHovered();
+        var hovered =
+            ImGui.IsItemHovered();
+
         ImGui.PopID();
 
-        var fill = disabled
-            ? new Vector4(CardBg.X, CardBg.Y, CardBg.Z, CardBg.W * 0.55f)
-            : hovered ? CardBgHover : CardBg;
-        drawList.AddRectFilled(origin, origin + size, ImGui.GetColorU32(fill), 10f);
-        if (hovered && !disabled)
+        var fill =
+            disabled
+                ? new Vector4(
+                    CardBg.X,
+                    CardBg.Y,
+                    CardBg.Z,
+                    CardBg.W * 0.55f)
+                : hovered
+                    ? CardBgHover
+                    : CardBg;
+
+        drawList.AddRectFilled(
+            origin,
+            origin + size,
+            ImGui.GetColorU32(fill),
+            9f);
+
+        drawList.AddRect(
+            origin,
+            origin + size,
+            ImGui.GetColorU32(
+                hovered && !disabled
+                    ? new Vector4(
+                        color.X,
+                        color.Y,
+                        color.Z,
+                        0.45f)
+                    : BorderSubtle),
+            9f,
+            ImDrawFlags.None,
+            1f);
+
+        const float disc = 30f;
+
+        var discOrigin =
+            origin +
+            new Vector2(
+                10f,
+                (size.Y - disc) * 0.5f);
+
+        drawList.AddRectFilled(
+            discOrigin,
+            discOrigin +
+            new Vector2(disc, disc),
+            ImGui.GetColorU32(
+                new Vector4(
+                    color.X,
+                    color.Y,
+                    color.Z,
+                    disabled
+                        ? 0.10f
+                        : 0.20f)),
+            8f);
+
+        using (ImRaii.PushFont(
+            UiBuilder.IconFont))
         {
-            drawList.AddRect(origin, origin + size,
-                ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, 0.55f)), 10f,
-                ImDrawFlags.None, 1.25f);
+            var glyph =
+                icon.ToIconString();
+
+            var glyphSize =
+                ImGui.CalcTextSize(
+                    glyph);
+
+            drawList.AddText(
+                discOrigin +
+                new Vector2(disc, disc) * 0.5f -
+                glyphSize * 0.5f,
+                ImGui.GetColorU32(
+                    disabled
+                        ? new Vector4(
+                            color.X,
+                            color.Y,
+                            color.Z,
+                            0.35f)
+                        : color),
+                glyph);
         }
 
-        const float disc = 26f;
-        var discOrigin = origin + new Vector2(10, (size.Y - disc) / 2);
-        var discAlpha = disabled ? 0.10f : 0.22f;
-        drawList.AddRectFilled(discOrigin, discOrigin + new Vector2(disc, disc),
-            ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, discAlpha)), 8f);
-        using (ImRaii.PushFont(UiBuilder.IconFont))
-        {
-            var glyph = icon.ToIconString();
-            var glyphSize = ImGui.CalcTextSize(glyph);
-            drawList.AddText(discOrigin + new Vector2(disc, disc) / 2 - glyphSize / 2,
-                ImGui.GetColorU32(disabled
-                    ? new Vector4(color.X, color.Y, color.Z, 0.35f)
-                    : color), glyph);
-        }
+        var titleColor =
+            disabled
+                ? new Vector4(
+                    1f,
+                    1f,
+                    1f,
+                    0.35f)
+                : Vector4.One;
 
-        var titleColor = disabled ? new Vector4(1f, 1f, 1f, 0.35f) : Vector4.One;
-        var subColor = disabled
-            ? new Vector4(MutedText.X, MutedText.Y, MutedText.Z, 0.35f)
-            : MutedText;
-        drawList.AddText(origin + new Vector2(44, 8), ImGui.GetColorU32(titleColor), title);
-        drawList.AddText(origin + new Vector2(44, 24), ImGui.GetColorU32(subColor), subtitle);
+        var subtitleColor =
+            disabled
+                ? new Vector4(
+                    MutedText.X,
+                    MutedText.Y,
+                    MutedText.Z,
+                    0.35f)
+                : MutedText;
 
-        return clicked && !disabled;
+        drawList.AddText(
+            origin +
+            new Vector2(50f, 9f),
+            ImGui.GetColorU32(
+                titleColor),
+            title);
+
+        drawList.AddText(
+            origin +
+            new Vector2(50f, 27f),
+            ImGui.GetColorU32(
+                subtitleColor),
+            subtitle);
+
+        return clicked &&
+               !disabled;
     }
 
     private void DrawProfileAvatarPathPopup(CharacterSession session)
