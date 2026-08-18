@@ -87,7 +87,19 @@ namespace AlphaChannel.Plugin.Video
 			_ = mpv_set_option_string(_mpvCtx, "terminal", "yes");
 			_ = mpv_set_option_string(_mpvCtx, "volume", initialVolume.ToString(System.Globalization.CultureInfo.InvariantCulture));
 			_ = mpv_set_option_string(_mpvCtx, "msg-level", "all=warn,ffmpeg=error");
-			var ytdlRawOptions = "force-ipv4=,hls-use-mpegts=";
+			// force-ipv4 used to be set here too, but it only affects yt-dlp's own resolve
+			// request - not mpv/ffmpeg's later fetch of the resolved URL, which has no
+			// equivalent option. On a dual-stack system that pins yt-dlp to IPv4 while mpv's own
+			// fetch still prefers IPv6 by default, so the CDN sees a request from a different IP
+			// than the one baked into the signed URL and returns 403 on every single playback.
+			// Leaving IP family unforced keeps both sides on the same OS-chosen default instead.
+			// YouTube's SABR-only rollout means web/web_safari/mweb/ios/tv_simply now require a
+			// GVS PO token yt-dlp doesn't supply out of the box - even when they resolve *a* URL
+			// it 403s on first fetch, or the video has no non-PO-token formats at all ("Only
+			// images are available"). android is the one client still handing out a working,
+			// PO-token-free progressive stream (itag 18, capped ~360p) confirmed against real
+			// videos end-to-end (resolve + actual curl fetch), so pin extraction to it.
+			var ytdlRawOptions = "hls-use-mpegts=,extractor-args=youtube:player_client=android";
 			if (useFirefoxCookies && FindFirefoxProfile() is { } firefoxProfile)
 			{
 				// Best-effort: reads cookies straight out of a local Firefox profile instead of a
@@ -203,12 +215,17 @@ namespace AlphaChannel.Plugin.Video
 
 			// Everything below touches state (_mpvRenderCtx, _bufferPtr, _snapA/_snapB,
 			// _targetTexture) that StopRender's cleanup task frees/nulls under the same
-			// _mpvLock. Holding the lock for the whole render+enqueue - and rechecking these
+			// _renderLock. Holding the lock for the whole render+enqueue - and rechecking these
 			// fields after acquiring it - is what stops a queued UpdateSubresource closure from
 			// ever outliving the buffers/texture it captured: either this runs fully before
 			// StopRender's cleanup (which then cancels the just-queued work before freeing), or
 			// StopRender's cleanup wins the lock first and this bails out on the null/zero check.
-			lock (_mpvLock)
+			// This is a separate lock from _mpvLock (which guards _mpvCtx command/property calls)
+			// on purpose - RenderFrame runs once per mpv frame and holds this for the actual
+			// native render+copy, so sharing it with _mpvLock would make every UI-thread property
+			// poll (GetProperties, IsEofReached, ...) queue up behind that native call and stall
+			// the game's own frame rate.
+			lock (_renderLock)
 			{
 				if (_closed || _mpvRenderCtx == IntPtr.Zero)
 				{
@@ -267,6 +284,9 @@ namespace AlphaChannel.Plugin.Video
 			}
 		}
 		private readonly Lock _mpvLock = new();
+		// Guards _mpvRenderCtx/_bufferPtr/_snapA/_snapB/_targetTexture specifically - see the
+		// comment in RenderFrame for why this is kept separate from _mpvLock.
+		private readonly Lock _renderLock = new();
 		public void StopRender()
 		{
 			_closed = true;
@@ -278,7 +298,7 @@ namespace AlphaChannel.Plugin.Video
 
 			Task.Run(() =>
 			{
-				lock (_mpvLock)
+				lock (_renderLock)
 				{
 					// Cancelling here, inside the same lock RenderFrame enqueues its
 					// UpdateSubresource closure under, guarantees this always runs after any
@@ -294,12 +314,6 @@ namespace AlphaChannel.Plugin.Video
 					if (_updateCallbackHandle.IsAllocated)
 					{
 						_updateCallbackHandle.Free();
-					}
-
-					if (_mpvCtx != IntPtr.Zero)
-					{
-						mpv_terminate_destroy(_mpvCtx);
-						_mpvCtx = IntPtr.Zero;
 					}
 
 					if (_bufferPtr != IntPtr.Zero)
@@ -324,6 +338,15 @@ namespace AlphaChannel.Plugin.Video
 					Marshal.FreeHGlobal(_renderParamsPtr);
 
 					_targetTexture = null;
+				}
+
+				lock (_mpvLock)
+				{
+					if (_mpvCtx != IntPtr.Zero)
+					{
+						mpv_terminate_destroy(_mpvCtx);
+						_mpvCtx = IntPtr.Zero;
+					}
 				}
 			});
 
@@ -654,7 +677,6 @@ namespace AlphaChannel.Plugin.Video
 										// looked identical to "still buffering" from the outside, forever.
 										AepLog.Warning($"[MPV/{prefix}/{level}] {text.Trim()}");
 										OnError?.Invoke(text.Trim());
-										Stop();
 									}
                                     AepLog.Verbose($"[MPV/{prefix}/{level}] {text?.Trim()}");
                                 }
