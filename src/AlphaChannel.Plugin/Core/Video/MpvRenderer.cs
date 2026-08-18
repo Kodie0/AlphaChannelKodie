@@ -200,61 +200,77 @@ namespace AlphaChannel.Plugin.Video
 			}
 			if (_closed || _cancelToken!.Token.IsCancellationRequested)
 			{ AepLog.Debug("[MPV] Video Player stopped"); return false; }
-			ulong flags = mpv_render_context_update(_mpvRenderCtx);
-			if ((flags & 1) == 0)
-			{
-				return true;
-			}
 
-			try
+			// Everything below touches state (_mpvRenderCtx, _bufferPtr, _snapA/_snapB,
+			// _targetTexture) that StopRender's cleanup task frees/nulls under the same
+			// _mpvLock. Holding the lock for the whole render+enqueue - and rechecking these
+			// fields after acquiring it - is what stops a queued UpdateSubresource closure from
+			// ever outliving the buffers/texture it captured: either this runs fully before
+			// StopRender's cleanup (which then cancels the just-queued work before freeing), or
+			// StopRender's cleanup wins the lock first and this bails out on the null/zero check.
+			lock (_mpvLock)
 			{
-				int rc = mpv_render_context_render(_mpvRenderCtx, _renderParamsPtr);
-
-				if (_closed || _cancelToken!.Token.IsCancellationRequested)
+				if (_closed || _mpvRenderCtx == IntPtr.Zero)
 				{
 					return false;
 				}
 
-				if (rc == 0 && _targetTexture != null)
+				ulong flags = mpv_render_context_update(_mpvRenderCtx);
+				if ((flags & 1) == 0)
 				{
-					IntPtr snapshot = _useSnapA ? _snapA : _snapB;
-					_useSnapA = !_useSnapA;
-
-					unsafe
-					{
-						System.Buffer.MemoryCopy((void*)_bufferPtr, (void*)snapshot, _frameBytes, _frameBytes);
-					}
-
-					lock (_snapshotLock)
-					{
-						_latestSnapshot = snapshot;
-					}
-
-					Texture2D texture = _targetTexture;
-					int width = _width;
-					DxHandler.RunOnRenderThread(RenderKey, () =>
-					{
-						DxHandler.Device?.ImmediateContext.UpdateSubresource(texture, 0, null, snapshot, width * 4, 0);
-					});
 					return true;
 				}
-				else
+
+				try
 				{
-					AepLog.Warning($"[MPV] Error rendering frame: RC: {rc} Texture: {_targetTexture}");
+					int rc = mpv_render_context_render(_mpvRenderCtx, _renderParamsPtr);
+
+					if (_closed || _cancelToken!.Token.IsCancellationRequested)
+					{
+						return false;
+					}
+
+					if (rc == 0 && _targetTexture != null && _bufferPtr != IntPtr.Zero &&
+						_snapA != IntPtr.Zero && _snapB != IntPtr.Zero)
+					{
+						IntPtr snapshot = _useSnapA ? _snapA : _snapB;
+						_useSnapA = !_useSnapA;
+
+						unsafe
+						{
+							System.Buffer.MemoryCopy((void*)_bufferPtr, (void*)snapshot, _frameBytes, _frameBytes);
+						}
+
+						lock (_snapshotLock)
+						{
+							_latestSnapshot = snapshot;
+						}
+
+						Texture2D texture = _targetTexture;
+						int width = _width;
+						DxHandler.RunOnRenderThread(RenderKey, () =>
+						{
+							DxHandler.Device?.ImmediateContext.UpdateSubresource(texture, 0, null, snapshot, width * 4, 0);
+						});
+						return true;
+					}
+					else
+					{
+						AepLog.Warning($"[MPV] Error rendering frame: RC: {rc} Texture: {_targetTexture}");
+					}
 				}
+				catch (Exception e)
+				{
+					AepLog.Warning($"[MPV] Error rendering frame: {e.Message} {e.StackTrace}");
+				}
+				return false;
 			}
-			catch (Exception e)
-			{
-				AepLog.Warning($"[MPV] Error rendering frame: {e.Message} {e.StackTrace}");
-			}
-			return false;
 		}
 		private readonly Lock _mpvLock = new();
 		public void StopRender()
 		{
 			_closed = true;
 			_cancelToken!.Cancel();
-			DxHandler.CancelRenderThreadWork(RenderKey);
 			lock (_snapshotLock)
 			{
 				_latestSnapshot = IntPtr.Zero;
@@ -264,6 +280,12 @@ namespace AlphaChannel.Plugin.Video
 			{
 				lock (_mpvLock)
 				{
+					// Cancelling here, inside the same lock RenderFrame enqueues its
+					// UpdateSubresource closure under, guarantees this always runs after any
+					// enqueue that raced ahead of it - so nothing queued survives to fire against
+					// the buffers/texture this block is about to free below.
+					DxHandler.CancelRenderThreadWork(RenderKey);
+
 					if (_mpvRenderCtx != IntPtr.Zero)
 					{
 						mpv_render_context_free(_mpvRenderCtx);
