@@ -6,7 +6,14 @@ namespace AlphaChannel.Plugin.Video;
 
 internal sealed record VideoMetadata(string Title, string Source, TimeSpan? Duration, string? ThumbnailUrl);
 
-internal sealed record VideoSearchEntry(string Title, string Url, string ChannelName, TimeSpan? Duration, string? ThumbnailUrl);
+internal sealed record VideoSearchEntry(
+    string Title,
+    string Url,
+    string ChannelName,
+    TimeSpan? Duration,
+    string? ThumbnailUrl,
+    long? ViewCount = null,
+    DateTimeOffset? UploadDate = null);
 
 internal sealed record ResolvedStream(string VideoUrl, string? AudioUrl, string QualityLabel);
 
@@ -56,7 +63,7 @@ internal sealed class VideoUrlResolver
 
             // Only reach for adaptive when the requested quality is above what muxed can ever
             // offer - not just above what this particular video's muxed ceiling happens to be.
-            if (maxHeight > MuxedCeiling && video is not null && audio is not null)
+            if (false && maxHeight > MuxedCeiling && video is not null && audio is not null)
             {
                 var label = video.VideoQuality.Label;
                 AepLog.Debug($"[Video] Resolved {url} -> video={video.Url} audio={audio.Url} ({label}, adaptive)");
@@ -80,6 +87,230 @@ internal sealed class VideoUrlResolver
         {
             return (null, $"Failed to resolve YouTube URL: {exception.Message}");
         }
+    }
+
+    public async Task<List<VideoSearchEntry>> SearchWithMetadataAsync(
+    string query,
+    int maxResults,
+    CancellationToken token)
+    {
+        var results =
+            await SearchAsync(
+                    query,
+                    maxResults,
+                    token)
+                .ConfigureAwait(false);
+
+        if (results.Count == 0)
+        {
+            return results;
+        }
+
+        using var gate =
+            new SemaphoreSlim(5);
+
+        var tasks =
+            results.Select(
+                async result =>
+                {
+                    await gate
+                        .WaitAsync(token)
+                        .ConfigureAwait(false);
+
+                    try
+                    {
+                        var video =
+                            await youtube.Videos
+                                .GetAsync(
+                                    result.Url,
+                                    token)
+                                .ConfigureAwait(false);
+
+                        return result with
+                        {
+                            ViewCount =
+                                video.Engagement.ViewCount,
+
+                            UploadDate =
+                                video.UploadDate
+                        };
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return result;
+                    }
+                    catch (Exception exception)
+                    {
+                        AepLog.Warning(
+                            $"[Home] Failed to enrich YouTube metadata for " +
+                            $"{result.Url}: {exception.Message}");
+
+                        return result;
+                    }
+                    finally
+                    {
+                        gate.Release();
+                    }
+                })
+            .ToArray();
+
+        var enriched =
+            await Task.WhenAll(tasks)
+                .ConfigureAwait(false);
+
+        return enriched.ToList();
+    }
+
+    public async Task<List<VideoSearchEntry>> SearchLatestAggregatedAsync(
+    IReadOnlyList<string> queries,
+    int maxResults,
+    CancellationToken token)
+    {
+        // ---------------------------------------------------------
+        // Run all search queries concurrently.
+        // ---------------------------------------------------------
+
+        var searchTasks =
+            queries.Select(
+                async query =>
+                {
+                    try
+                    {
+                        return await SearchAsync(
+                                query,
+                                6,
+                                token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return [];
+                    }
+                    catch (Exception exception)
+                    {
+                        AepLog.Warning(
+                            $"[Video] FFXIV aggregate search failed for " +
+                            $"'{query}': {exception.Message}");
+
+                        return [];
+                    }
+                })
+            .ToArray();
+
+        var searchResults =
+            await Task.WhenAll(searchTasks)
+                .ConfigureAwait(false);
+
+        // ---------------------------------------------------------
+        // Deduplicate results shared between queries.
+        // ---------------------------------------------------------
+
+        var candidates =
+            new Dictionary<string, VideoSearchEntry>(
+                StringComparer.OrdinalIgnoreCase);
+
+        foreach (var resultSet in searchResults)
+        {
+            foreach (var result in resultSet)
+            {
+                candidates.TryAdd(
+                    result.Url,
+                    result);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        // ---------------------------------------------------------
+        // Fetch detailed metadata concurrently, but don't hammer
+        // YouTube with every candidate simultaneously.
+        // ---------------------------------------------------------
+
+        using var gate =
+            new SemaphoreSlim(5);
+
+        var metadataTasks =
+            candidates.Values.Select(
+                async result =>
+                {
+                    await gate
+                        .WaitAsync(token)
+                        .ConfigureAwait(false);
+
+                    try
+                    {
+                        var video =
+                            await youtube.Videos
+                                .GetAsync(
+                                    result.Url,
+                                    token)
+                                .ConfigureAwait(false);
+
+                        var thumbnail =
+                            video.Thumbnails
+                                .OrderByDescending(
+                                    t => t.Resolution.Area)
+                                .FirstOrDefault();
+
+                        return result with
+                        {
+                            Title =
+                                video.Title,
+
+                            ChannelName =
+                                video.Author.ChannelTitle,
+
+                            Duration =
+                                video.Duration,
+
+                            ThumbnailUrl =
+                                thumbnail?.Url ??
+                                result.ThumbnailUrl,
+
+                            ViewCount =
+                                video.Engagement.ViewCount,
+
+                            UploadDate =
+                                video.UploadDate
+                        };
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return result;
+                    }
+                    catch (Exception exception)
+                    {
+                        AepLog.Warning(
+                            $"[Video] Failed to enrich FFXIV result " +
+                            $"{result.Url}: {exception.Message}");
+
+                        return result;
+                    }
+                    finally
+                    {
+                        gate.Release();
+                    }
+                })
+            .ToArray();
+
+        var enriched =
+            await Task.WhenAll(metadataTasks)
+                .ConfigureAwait(false);
+
+        // ---------------------------------------------------------
+        // We now have upload dates, so newest first.
+        // ---------------------------------------------------------
+
+        return enriched
+            .OrderByDescending(
+                item =>
+                    item.UploadDate ??
+                    DateTimeOffset.MinValue)
+            .Take(maxResults)
+            .ToList();
     }
 
     public async Task<VideoMetadata?> ResolveMetadataAsync(string url, CancellationToken token)

@@ -95,6 +95,32 @@ internal sealed class Configuration : IPluginConfiguration
     // Home welcome illustration (couch / castle art). Off = text + CTA only.
     public bool ShowHomeHeroImage { get; set; } = true;
 
+    // Optional FFXIV discovery shelf on the media-hub Home page.
+    public bool ShowFfxivYouTubeSection { get; set; } = true;
+
+    // Trending video topic preferences.
+    public bool TrendingGaming { get; set; } = true;
+    public bool TrendingMMORPG { get; set; } = true;
+    public bool TrendingFinalFantasy { get; set; } = true;
+    public bool TrendingAnime { get; set; } = true;
+    public bool TrendingMovies { get; set; } = true;
+    public bool TrendingTvShows { get; set; } = true;
+    public bool TrendingMusic { get; set; } = true;
+    public bool TrendingMemes { get; set; } = true;
+
+    public bool TrendingWildlife { get; set; } = true;
+    public bool TrendingArchitecture { get; set; } = true;
+    public bool TrendingScience { get; set; } = true;
+    public bool TrendingSpace { get; set; } = true;
+    public bool TrendingHistory { get; set; } = true;
+    public bool TrendingTechnology { get; set; } = true;
+
+    public bool TrendingPets { get; set; } = true;
+    public bool TrendingFood { get; set; } = true;
+    public bool TrendingTravel { get; set; } = true;
+    public bool TrendingCars { get; set; } = true;
+    public bool TrendingSports { get; set; } = true;
+
     // Optional replacement for the bundled Home hero art (copied under Backgrounds/).
     public string? CustomHomeHeroPath { get; set; }
 

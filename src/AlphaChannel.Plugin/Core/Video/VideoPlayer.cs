@@ -25,6 +25,7 @@ internal sealed class VideoPlayer : IDisposable
 
     public VideoPlaybackState State { get; private set; } = VideoPlaybackState.Idle;
     public string? LastError { get; private set; }
+    public int PlaybackAttemptId { get; private set; }
 
     public bool HardwareDecoding
     {
@@ -65,7 +66,47 @@ internal sealed class VideoPlayer : IDisposable
     // True once mpv has nothing left to play (natural end, with keep-open=yes so it doesn't
     // reset position) or before anything has ever been loaded. Callers polling this for
     // auto-advance should throttle - see AetherStreamQueue, which does not poll every frame.
-    public bool IsIdle() => engine.GetIdle();
+    public bool IsIdle()
+    {
+        CheckForPlaybackFailure();
+
+        if (State == VideoPlaybackState.Failed)
+        {
+            return true;
+        }
+
+        return engine.GetIdle();
+    }
+
+    private void CheckForPlaybackFailure()
+    {
+        if (State == VideoPlaybackState.Idle ||
+            State == VideoPlaybackState.Failed)
+        {
+            return;
+        }
+
+        if (engine.LastError is not { } error)
+        {
+            return;
+        }
+
+        State = VideoPlaybackState.Failed;
+        LastError = error;
+
+        AepLog.Warning(
+            $"[Video] Playback failed; resetting player: {error}");
+
+        try
+        {
+            engine.StopVideo();
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning(
+                $"[Video] Failed to reset player after playback error: {exception.Message}");
+        }
+    }
 
     // AlphaChannel's engine resolves both YouTube and generic page URLs itself, via mpv's bundled
     // ytdl_hook + yt-dlp (see MpvRenderer's "ytdl"/"ytdl-format" options) - unlike the old
@@ -76,6 +117,8 @@ internal sealed class VideoPlayer : IDisposable
     {
         try
         {
+            PlaybackAttemptId++;
+
             LastError = null;
             State = VideoPlaybackState.Loading;
             engine.PlayVideo(url);
@@ -99,15 +142,7 @@ internal sealed class VideoPlayer : IDisposable
 
     public (float Position, float Duration, bool Paused) GetProgress()
     {
-        // engine.LastError is only ever set from PlayVideo's detached background task, well after
-        // Play() itself already optimistically set State = Playing and returned - this is the
-        // first point afterward where that failure becomes visible, since GetProgress is polled
-        // every frame by the Player tab and on every WatchAlongSession.OnState update.
-        if (State != VideoPlaybackState.Idle && engine.LastError is { } error && LastError != error)
-        {
-            State = VideoPlaybackState.Failed;
-            LastError = error;
-        }
+        CheckForPlaybackFailure();
 
         var info = engine.GetInfo();
         return ((float)info[0], (float)info[1], engine.GetPaused());

@@ -414,6 +414,43 @@ internal sealed partial class MainWindow
 
         DrawWhisperSettings();
 
+        SettingsHairline();
+
+        SettingsSection(
+            "Video playback",
+            "Playback options for YouTube and online video sources.");
+
+        DrawCookiesSettings();
+
+        SettingsHairline();
+
+        SettingsSection(
+            "Home sections",
+            "Restore hidden sections on the Home page.");
+
+        if (!Plugin.Cfg.ShowFfxivYouTubeSection)
+        {
+            if (ImGui.Button("Show FFXIV videos section"))
+            {
+                Plugin.Cfg.ShowFfxivYouTubeSection = true;
+                Plugin.Cfg.Save();
+            }
+        }
+        else
+        {
+            ImGui.TextColored(
+                MutedText,
+                "FFXIV videos section is currently visible.");
+        }
+
+        SettingsHairline();
+
+        SettingsSection(
+            "Trending video topics",
+            "Choose the topics used for your Trending videos.");
+
+        DrawTrendingTopicTags();
+
         // Hidden from players — enable ShowServerStackSwitcher
         // in the plugin config JSON to show.
         if (Plugin.Cfg.ShowServerStackSwitcher)
@@ -1707,5 +1744,186 @@ internal sealed partial class MainWindow
         }
 
         ImGui.TextColored(MutedText, $"Currently: {Plugin.Cfg.RelayServerUrl}");
+    }
+
+    private void DrawTrendingTopicTags()
+    {
+        ImGui.TextColored(
+            MutedText,
+            "Entertainment");
+
+        Plugin.Cfg.TrendingGaming =
+            DrawTrendingTopicTag(
+                "Gaming",
+                Plugin.Cfg.TrendingGaming);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingMMORPG =
+            DrawTrendingTopicTag(
+                "MMORPG",
+                Plugin.Cfg.TrendingMMORPG);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingFinalFantasy =
+            DrawTrendingTopicTag(
+                "Final Fantasy",
+                Plugin.Cfg.TrendingFinalFantasy);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingAnime =
+            DrawTrendingTopicTag(
+                "Anime",
+                Plugin.Cfg.TrendingAnime);
+
+        ImGui.NewLine();
+
+        Plugin.Cfg.TrendingMovies =
+            DrawTrendingTopicTag(
+                "Movies",
+                Plugin.Cfg.TrendingMovies);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingTvShows =
+            DrawTrendingTopicTag(
+                "TV Shows",
+                Plugin.Cfg.TrendingTvShows);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingMusic =
+            DrawTrendingTopicTag(
+                "Music",
+                Plugin.Cfg.TrendingMusic);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingMemes =
+            DrawTrendingTopicTag(
+                "Memes",
+                Plugin.Cfg.TrendingMemes);
+
+
+        ImGui.Dummy(
+            new Vector2(0f, 8f));
+
+
+        ImGui.TextColored(
+            MutedText,
+            "World & Knowledge");
+
+        Plugin.Cfg.TrendingWildlife =
+            DrawTrendingTopicTag(
+                "Wildlife",
+                Plugin.Cfg.TrendingWildlife);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingArchitecture =
+            DrawTrendingTopicTag(
+                "Architecture",
+                Plugin.Cfg.TrendingArchitecture);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingScience =
+            DrawTrendingTopicTag(
+                "Science",
+                Plugin.Cfg.TrendingScience);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingSpace =
+            DrawTrendingTopicTag(
+                "Space",
+                Plugin.Cfg.TrendingSpace);
+
+        ImGui.NewLine();
+
+        Plugin.Cfg.TrendingHistory =
+            DrawTrendingTopicTag(
+                "History",
+                Plugin.Cfg.TrendingHistory);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingTechnology =
+            DrawTrendingTopicTag(
+                "Technology",
+                Plugin.Cfg.TrendingTechnology);
+
+
+        ImGui.Dummy(
+            new Vector2(0f, 8f));
+
+
+        ImGui.TextColored(
+            MutedText,
+            "Lifestyle");
+
+        Plugin.Cfg.TrendingPets =
+            DrawTrendingTopicTag(
+                "Pets",
+                Plugin.Cfg.TrendingPets);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingFood =
+            DrawTrendingTopicTag(
+                "Food",
+                Plugin.Cfg.TrendingFood);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingTravel =
+            DrawTrendingTopicTag(
+                "Travel",
+                Plugin.Cfg.TrendingTravel);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingCars =
+            DrawTrendingTopicTag(
+                "Cars",
+                Plugin.Cfg.TrendingCars);
+
+        ImGui.SameLine();
+
+        Plugin.Cfg.TrendingSports =
+            DrawTrendingTopicTag(
+                "Sports",
+                Plugin.Cfg.TrendingSports);
+
+
+        Plugin.Cfg.Save();
+    }
+    private bool DrawTrendingTopicTag(
+    string label,
+    bool enabled)
+    {
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            14f))
+        using (ImRaii.PushColor(
+            ImGuiCol.Button,
+            enabled
+                ? Accent
+                : CardBg))
+        using (ImRaii.PushColor(
+            ImGuiCol.ButtonHovered,
+            enabled
+                ? AccentHover
+                : CardBgHover))
+        {
+            if (ImGui.SmallButton(label))
+            {
+                return !enabled;
+            }
+        }
+
+        return enabled;
     }
 }

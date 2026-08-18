@@ -17,6 +17,11 @@ internal sealed partial class MainWindow
     private float seekPreview;
     private bool seekDragging;
 
+    // Playback failure toast
+    private string? playbackErrorToast;
+    private double playbackErrorToastStartedAt;
+    private int lastPlaybackErrorAttempt;
+
     private void DrawPlayback()
     {
         if (queue.Current is not { } current)
@@ -87,6 +92,197 @@ internal sealed partial class MainWindow
         });
 
         ImGui.Spacing();
+    }
+
+    private void DrawPlaybackErrorToast()
+    {
+        // ---------------------------------------------------------
+        // Detect a new playback failure
+        // ---------------------------------------------------------
+
+        if (video.State == VideoPlaybackState.Failed &&
+      video.LastError is { Length: > 0 } error &&
+      video.PlaybackAttemptId != lastPlaybackErrorAttempt)
+        {
+            lastPlaybackErrorAttempt = video.PlaybackAttemptId;
+
+            playbackErrorToast = error;
+            playbackErrorToastStartedAt = ImGui.GetTime();
+        }
+
+        if (playbackErrorToast is null)
+        {
+            return;
+        }
+
+        var elapsed =
+            ImGui.GetTime() -
+            playbackErrorToastStartedAt;
+
+        const double totalDuration = 4.5;
+        const double slideDuration = 0.25;
+        const double fadeDuration = 0.5;
+
+        if (elapsed >= totalDuration)
+        {
+            playbackErrorToast = null;
+            return;
+        }
+
+        // ---------------------------------------------------------
+        // Slide animation
+        // ---------------------------------------------------------
+
+        var slideProgress =
+            Math.Clamp(
+                elapsed / slideDuration,
+                0.0,
+                1.0);
+
+        // Smooth-step so it doesn't move mechanically.
+        slideProgress =
+            slideProgress *
+            slideProgress *
+            (3.0 - 2.0 * slideProgress);
+
+        var alpha = 1f;
+
+        if (elapsed >
+            totalDuration - fadeDuration)
+        {
+            alpha =
+                (float)Math.Clamp(
+                    (totalDuration - elapsed) /
+                    fadeDuration,
+                    0.0,
+                    1.0);
+        }
+
+        const float width = 420f;
+        const float height = 78f;
+        const float margin = 18f;
+
+        var windowPos =
+            ImGui.GetWindowPos();
+
+        var windowSize =
+            ImGui.GetWindowSize();
+
+        var finalX =
+            windowPos.X +
+            windowSize.X -
+            width -
+            margin;
+
+        var finalY =
+            windowPos.Y +
+            margin;
+
+        // Start above the window and slide downward.
+        var startY =
+            windowPos.Y -
+            height -
+            10f;
+
+        var y =
+            startY +
+            (finalY - startY) *
+            (float)slideProgress;
+
+        var min =
+            new Vector2(
+                finalX,
+                y);
+
+        var max =
+            new Vector2(
+                finalX + width,
+                y + height);
+
+        var drawList =
+            ImGui.GetForegroundDrawList();
+
+        // ---------------------------------------------------------
+        // Background
+        // ---------------------------------------------------------
+
+        var background =
+            new Vector4(
+                0.055f,
+                0.06f,
+                0.09f,
+                0.96f * alpha);
+
+        var border =
+            new Vector4(
+                Danger.X,
+                Danger.Y,
+                Danger.Z,
+                alpha);
+
+        drawList.AddRectFilled(
+            min,
+            max,
+            ImGui.GetColorU32(background),
+            9f);
+
+        drawList.AddRect(
+            min,
+            max,
+            ImGui.GetColorU32(border),
+            9f,
+            ImDrawFlags.None,
+            1.5f);
+
+        // Red accent strip.
+        drawList.AddRectFilled(
+            min,
+            new Vector2(
+                min.X + 4f,
+                max.Y),
+            ImGui.GetColorU32(border),
+            9f);
+
+        // ---------------------------------------------------------
+        // Text
+        // ---------------------------------------------------------
+
+        var titlePos =
+            new Vector2(
+                min.X + 18f,
+                min.Y + 13f);
+
+        drawList.AddText(
+            titlePos,
+            ImGui.GetColorU32(
+                new Vector4(
+                    1f,
+                    1f,
+                    1f,
+                    alpha)),
+            "Video couldn't be played");
+
+        var message =
+            playbackErrorToast;
+
+        // Keep the raw MPV error from taking over the whole window.
+        if (message.Length > 90)
+        {
+            message =
+                message[..87] + "...";
+        }
+
+        drawList.AddText(
+            new Vector2(
+                min.X + 18f,
+                min.Y + 40f),
+            ImGui.GetColorU32(
+                new Vector4(
+                    MutedText.X,
+                    MutedText.Y,
+                    MutedText.Z,
+                    alpha)),
+            message);
     }
 
     private void DrawVolumeControl()

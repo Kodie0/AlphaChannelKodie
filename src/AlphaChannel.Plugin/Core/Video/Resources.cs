@@ -110,21 +110,27 @@ internal sealed class Resources : IDisposable
 		return null;
 	}
 
-	internal string? GetLocationYTDLP()
-	{
-		string filenameStart = "yt-dlp";
-		string? dir = Directory.GetDirectories(_configDir, $"{filenameStart}*").FirstOrDefault();
-		if (dir != null)
-		{
-			return dir + "/yt-dlp.exe";
-		}
-		else
-		{
-			return null;
-		}
-	}
+    internal string? GetLocationYTDLP()
+    {
+        const string filenameStart = "yt-dlp";
 
-	internal string? GetLocationSNES9X()
+        foreach (var dir in Directory
+                     .GetDirectories(_configDir, $"{filenameStart}*")
+                     .OrderByDescending(d => d, StringComparer.Ordinal))
+        {
+            var exe = Path.Combine(dir, "yt-dlp.exe");
+
+            if (File.Exists(exe))
+            {
+                AepLog.Debug($"[YTDLP] Using executable: {exe}");
+                return exe;
+            }
+        }
+
+        return null;
+    }
+
+    internal string? GetLocationSNES9X()
 	{
 		string directoryName = "snes9x";
 		string? dir = Directory.GetDirectories(_configDir, $"{directoryName}*").FirstOrDefault();

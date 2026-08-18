@@ -74,6 +74,8 @@ internal sealed class VideoEngine : IDisposable
     private bool _lastIdle = true;
     private int _pendingVolume = 60;
 
+    private volatile bool _rendererFailed;
+
     // Read fresh at Play() time by MpvRenderer.Initialize so a settings change takes effect on
     // the next video, not the current one - matching how the old VideoPlayer read these.
     internal bool HardwareDecoding { get; set; }
@@ -115,20 +117,86 @@ internal sealed class VideoEngine : IDisposable
     internal void StopVideo()
     {
         _isActive = false;
-        _mpvRenderer?.Stop();
+        _rendererFailed = false;
+
+        var renderer = _mpvRenderer;
         _mpvRenderer = null;
+
+        _screenPainter.SetLoading(false);
         _screenPainter.SetTarget(null);
+
+        if (renderer is not null)
+        {
+            try
+            {
+                renderer.Dispose();
+            }
+            catch (Exception exception)
+            {
+                AepLog.Warning(
+                    $"[MPV] Failed to dispose renderer cleanly: {exception.Message}");
+            }
+        }
+
+        // MpvRenderer.Dispose() cancels the token it was given.
+        // Every fresh renderer therefore needs a fresh token source.
+        _renderCancellation.Dispose();
+        _renderCancellation =
+            new CancellationTokenSource();
+    }
+
+    private void ResetFailedRenderer()
+    {
+        var renderer = _mpvRenderer;
+
+        _mpvRenderer = null;
+        _rendererFailed = false;
+        _isActive = false;
+
+        _screenPainter.SetLoading(false);
+        _screenPainter.SetTarget(null);
+
+        if (renderer is not null)
+        {
+            try
+            {
+                renderer.Dispose();
+            }
+            catch (Exception exception)
+            {
+                AepLog.Warning(
+                    $"[MPV] Failed renderer cleanup: {exception.Message}");
+            }
+        }
+
+        _renderCancellation.Dispose();
+        _renderCancellation =
+            new CancellationTokenSource();
     }
 
     internal void PlayVideo(string url, int playbackPosition = 0, bool isPlaying = true)
     {
-        if (_mpvRenderer != null && _mpvRenderer.GetCurrentUrl() == url && !_mpvRenderer.IsIdle())
+        // Never reuse an MPV instance that has already suffered a playback failure.
+        if (_rendererFailed)
+        {
+            AepLog.Warning(
+                "[MPV] Resetting failed renderer before loading next video.");
+
+            ResetFailedRenderer();
+        }
+
+        if (_mpvRenderer != null &&
+            _mpvRenderer.GetCurrentUrl() == url &&
+            !_mpvRenderer.IsIdle())
         {
             return;
         }
 
         LastError = null;
+
         AssignScreenForSession(_screenTexture);
+
+        _screenPainter.SetLoading(true);
 
         Task.Run(async () =>
         {
@@ -148,26 +216,67 @@ internal sealed class VideoEngine : IDisposable
             {
                 if (_mpvRenderer != null)
                 {
-                    _mpvRenderer.Play(url, playbackPosition, isPlaying);
+                    _mpvRenderer.OnFrameRendered =
+                        () => _screenPainter.SetLoading(false);
+
+                    _mpvRenderer.Play(
+                        url,
+                        playbackPosition,
+                        isPlaying);
+
                     _isActive = true;
-                    // AssignScreenForSession's SpawnScreenInFrontOfLocalPlayer already computed
-                    // ScreenPosition/Yaw/Scale synchronously above, but SetScreenTransform only
-                    // pushes into the painter while _isActive is true - which it wasn't yet at
-                    // that point on a genuinely new session. Push it now that it actually is, or
-                    // the screen stays parked at the painter's stale/default transform until the
-                    // next unrelated SetScreenTransform call happens to fire.
-                    _screenPainter.SetTransform(ScreenPosition, ScreenYaw, ScreenScale);
+
+                    _screenPainter.SetTransform(
+                        ScreenPosition,
+                        ScreenYaw,
+                        ScreenScale);
+
                     return;
                 }
 
                 _mpvRenderer = new MpvRenderer();
-                _mpvRenderer.OnError = message => LastError = message;
-                _mpvRenderer.Initialize(ScreenWidth, ScreenHeight, _screenTexture, _renderCancellation,
-                    HardwareDecoding, MaxQualityHeight, AllowInsecureDirectUrls, _pendingVolume, CookiesPath,
+
+                _mpvRenderer.OnError =
+     message =>
+     {
+         LastError = message;
+         _rendererFailed = true;
+
+         _isActive = false;
+
+         _screenPainter.SetLoading(false);
+         _screenPainter.SetTarget(null);
+
+         AepLog.Warning(
+             $"[MPV] Playback failed; renderer marked for reset: {message}");
+     };
+
+                _mpvRenderer.OnFrameRendered =
+                    () => _screenPainter.SetLoading(false);
+
+                _mpvRenderer.Initialize(
+                    ScreenWidth,
+                    ScreenHeight,
+                    _screenTexture,
+                    _renderCancellation,
+                    HardwareDecoding,
+                    MaxQualityHeight,
+                    AllowInsecureDirectUrls,
+                    _pendingVolume,
+                    CookiesPath,
                     UseFirefoxCookies);
-                _mpvRenderer.Play(url, playbackPosition, isPlaying);
+
+                _mpvRenderer.Play(
+                    url,
+                    playbackPosition,
+                    isPlaying);
+
                 _isActive = true;
-                _screenPainter.SetTransform(ScreenPosition, ScreenYaw, ScreenScale);
+
+                _screenPainter.SetTransform(
+                    ScreenPosition,
+                    ScreenYaw,
+                    ScreenScale);
                 while (true)
                 {
                     if (!_mpvRenderer.RenderFrame())

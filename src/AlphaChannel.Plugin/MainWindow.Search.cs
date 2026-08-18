@@ -21,6 +21,30 @@ internal sealed partial class MainWindow
     private volatile bool isSearching;
     private volatile List<VideoSearchEntry>? searchResults;
 
+    // Home media-hub YouTube shelf.
+    // Kept separate from Player search so Home doesn't overwrite the user's Browse results.
+    private volatile bool isLoadingHomeYouTube;
+    private volatile List<VideoSearchEntry>? homeYouTubeResults;
+    private bool homeYouTubeRequested;
+    private DateTime homeYouTubeCacheTime;
+    private readonly Random trendingRandom = new();
+
+    // Browse Videos full-page discovery
+    private volatile bool isLoadingBrowseVideos;
+    private volatile Dictionary<string, List<VideoSearchEntry>>? browseVideoResults;
+    private DateTime browseVideoCacheTime;
+    private bool browseVideoRequested;
+
+    // Youtube Trending Topics
+    private sealed record TrendingTopic(
+        string Name,
+        string[] SearchQueries);
+
+    // FFXIV-specific discovery shelf.
+    private volatile bool isLoadingFfxivYouTube;
+    private volatile List<VideoSearchEntry>? ffxivYouTubeResults;
+    private bool ffxivYouTubeRequested;
+
     // Dailymotion search (kept separate from YouTube)
     private string dailymotionSearchQuery = string.Empty;
     private volatile bool isSearchingDailymotion;
@@ -742,6 +766,484 @@ internal sealed partial class MainWindow
                 new Vector2(0f, 8f));
         }
             }
+        }
+    }
+
+    private List<TrendingTopic> GetEnabledTrendingTopics()
+    {
+        var topics = new List<TrendingTopic>();
+
+        // Entertainment
+        if (Plugin.Cfg.TrendingGaming)
+        {
+            topics.Add(new(
+                "Gaming",
+                [
+                    "trending gaming videos",
+                "gaming news",
+                "new game releases"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingMMORPG)
+        {
+            topics.Add(new(
+                "MMORPG",
+                [
+                    "MMORPG news",
+                "new MMORPG releases",
+                "MMORPG gameplay"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingFinalFantasy)
+        {
+            topics.Add(new(
+                "Final Fantasy",
+                [
+                    "Final Fantasy XIV",
+                "FFXIV news",
+                "FF14 gameplay"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingAnime)
+        {
+            topics.Add(new(
+                "Anime",
+                [
+                    "anime trailers",
+                "anime trending",
+                "anime news"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingMovies)
+        {
+            topics.Add(new(
+                "Movies",
+                [
+                    "movie trailers",
+                "movie news",
+                "best movies"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingTvShows)
+        {
+            topics.Add(new(
+                "TV Shows",
+                [
+                    "new TV shows",
+                "TV show trailers",
+                "TV show news"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingMusic)
+        {
+            topics.Add(new(
+                "Music",
+                [
+                    "new music releases",
+                "music trending",
+                "latest songs"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingMemes)
+        {
+            topics.Add(new(
+                "Memes",
+                [
+                    "funny memes",
+                "viral memes",
+                "meme compilation"
+                ]));
+        }
+
+        // World & Knowledge
+        if (Plugin.Cfg.TrendingWildlife)
+        {
+            topics.Add(new(
+                "Wildlife",
+                [
+                    "amazing wildlife documentary",
+                "wildlife discoveries",
+                "animal documentary"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingArchitecture)
+        {
+            topics.Add(new(
+                "Architecture",
+                [
+                    "amazing architecture",
+                "modern architecture design",
+                "unique buildings"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingScience)
+        {
+            topics.Add(new(
+                "Science",
+                [
+                    "science discoveries",
+                "latest science news",
+                "amazing science"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingSpace)
+        {
+            topics.Add(new(
+                "Space",
+                [
+                    "space discoveries",
+                "NASA news",
+                "universe documentary"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingHistory)
+        {
+            topics.Add(new(
+                "History",
+                [
+                    "history documentary",
+                "historical discoveries",
+                "ancient history"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingTechnology)
+        {
+            topics.Add(new(
+                "Technology",
+                [
+                    "latest technology news",
+                "new technology",
+                "future technology"
+                ]));
+        }
+
+        // Lifestyle
+        if (Plugin.Cfg.TrendingPets)
+        {
+            topics.Add(new(
+                "Pets",
+                [
+                    "cute pets",
+                "funny animals",
+                "adorable pets"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingFood)
+        {
+            topics.Add(new(
+                "Food",
+                [
+                    "amazing food",
+                "cooking videos",
+                "food discoveries"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingTravel)
+        {
+            topics.Add(new(
+                "Travel",
+                [
+                    "beautiful places travel",
+                "travel discoveries",
+                "amazing destinations"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingCars)
+        {
+            topics.Add(new(
+                "Cars",
+                [
+                    "car news",
+                "supercars",
+                "car reviews"
+                ]));
+        }
+
+        if (Plugin.Cfg.TrendingSports)
+        {
+            topics.Add(new(
+                "Sports",
+                [
+                    "sports highlights",
+                "sports news",
+                "best sports moments"
+                ]));
+        }
+
+        return topics;
+    }
+
+    private static double GetTrendingScore(VideoSearchEntry video)
+    {
+        var views = video.ViewCount ?? 0;
+
+        var viewScore = Math.Log10(
+            Math.Max(views, 1));
+
+        var ageBonus = 0d;
+
+        if (video.UploadDate is { } uploadDate)
+        {
+            var ageDays =
+                Math.Max(
+                    0,
+                    (DateTime.UtcNow - uploadDate).TotalDays);
+
+            // Strong boost for recent uploads.
+            // Falls off over roughly a month.
+            ageBonus =
+                Math.Max(
+                    0,
+                    30 - ageDays) / 30.0 * 3.0;
+        }
+
+        return viewScore + ageBonus;
+    }
+
+    private async Task LoadHomeYouTubeAsync(bool forceRefresh = false)
+    {
+        try
+        {
+            // Use cached results for 20 minutes unless manually refreshed.
+            if (false)
+            {
+                return;
+            }
+
+            var topics = GetEnabledTrendingTopics();
+            // Safety fallback - treat all topics as enabled.
+            if (topics.Count < 3)
+            {
+                topics =
+   [
+       new("Gaming", ["trending gaming videos", "gaming news", "new game releases"]),
+    new("MMORPG", ["MMORPG news", "new MMORPG releases", "MMORPG gameplay"]),
+    new("Final Fantasy", ["Final Fantasy XIV", "FFXIV news", "FF14 gameplay"]),
+    new("Anime", ["anime trailers", "anime trending", "anime news"]),
+    new("Movies", ["movie trailers", "movie news", "best movies"]),
+    new("TV Shows", ["new TV shows", "TV show trailers", "TV show news"]),
+    new("Music", ["new music releases", "music trending", "latest songs"]),
+    new("Memes", ["funny memes", "viral memes", "meme compilation"]),
+    new("Wildlife", ["amazing wildlife documentary", "wildlife discoveries", "animal documentary"]),
+    new("Architecture", ["amazing architecture", "modern architecture design", "unique buildings"]),
+    new("Science", ["science discoveries", "latest science news", "amazing science"]),
+    new("Space", ["space discoveries", "NASA news", "universe documentary"]),
+    new("History", ["history documentary", "historical discoveries", "ancient history"]),
+    new("Technology", ["latest technology news", "new technology", "future technology"]),
+    new("Pets", ["cute pets", "funny animals", "adorable pets"]),
+    new("Food", ["amazing food", "cooking videos", "food discoveries"]),
+    new("Travel", ["beautiful places travel", "travel discoveries", "amazing destinations"]),
+    new("Cars", ["car news", "supercars", "car reviews"]),
+    new("Sports", ["sports highlights", "sports news", "best sports moments"])
+   ];
+            }
+
+
+            var selectedTopics = topics
+                .OrderBy(_ => trendingRandom.Next())
+                .Take(3)
+                .ToList();
+
+
+            var searches = selectedTopics
+     .Select(topic =>
+         searchResolver.SearchWithMetadataAsync(
+             topic.SearchQueries[
+                 trendingRandom.Next(topic.SearchQueries.Length)],
+             5,
+             CancellationToken.None))
+     .ToList();
+
+            var searchResults = await Task
+                .WhenAll(searches)
+                .ConfigureAwait(false);
+
+            var results = searchResults
+                .SelectMany(x => x)
+                .ToList();
+
+            homeYouTubeResults = results
+                .GroupBy(x => x.Url)
+                .Select(x => x.First())
+                .OrderByDescending(GetTrendingScore)
+                .Take(5)
+                .ToList();
+
+            foreach (var video in homeYouTubeResults)
+            {
+                AepLog.Warning(
+                    $"[TRENDING TEST] {video.Title} | {video.Url}");
+            }
+
+            homeYouTubeCacheTime = DateTime.UtcNow;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning(
+                $"[Home] Failed to load YouTube shelf: {exception.Message}");
+
+            homeYouTubeResults = [];
+        }
+        finally
+        {
+            isLoadingHomeYouTube = false;
+        }
+    }
+
+    private async Task LoadBrowseVideosAsync(bool forceRefresh = false)
+    {
+        try
+        {
+            // Reuse Browse results for 20 minutes unless manually refreshed.
+            if (!forceRefresh &&
+                browseVideoResults is { Count: > 0 } &&
+                DateTime.UtcNow - browseVideoCacheTime < TimeSpan.FromMinutes(20))
+            {
+                return;
+            }
+
+            var topics = GetEnabledTrendingTopics();
+
+            if (topics.Count == 0)
+            {
+                browseVideoResults = [];
+                return;
+            }
+
+            // Pick up to 8 topics for the full Browse page.
+            var selectedTopics = topics
+                .OrderBy(_ => trendingRandom.Next())
+                .Take(8)
+                .ToList();
+
+            // Start with an empty dictionary so rows can appear
+            // progressively as each batch finishes.
+            browseVideoResults =
+                new Dictionary<string, List<VideoSearchEntry>>();
+
+            // Load in batches of 3.
+            const int batchSize = 3;
+
+            for (var batchStart = 0;
+                 batchStart < selectedTopics.Count;
+                 batchStart += batchSize)
+            {
+                var batch = selectedTopics
+                    .Skip(batchStart)
+                    .Take(batchSize)
+                    .ToList();
+
+                var searches = batch
+                    .Select(async topic =>
+                    {
+                        var query =
+                            topic.SearchQueries[
+                                trendingRandom.Next(
+                                    topic.SearchQueries.Length)];
+
+                        var results = await searchResolver
+                            .SearchWithMetadataAsync(
+                                query,
+                                15,
+                                CancellationToken.None)
+                            .ConfigureAwait(false);
+
+                        var ranked = results
+                            .GroupBy(x => x.Url)
+                            .Select(x => x.First())
+                            .OrderByDescending(GetTrendingScore)
+                            .Take(15)
+                            .ToList();
+
+                        return new
+                        {
+                            topic.Name,
+                            Results = ranked
+                        };
+                    })
+                    .ToList();
+
+                var loadedBatch = await Task
+                    .WhenAll(searches)
+                    .ConfigureAwait(false);
+
+                // Create a NEW dictionary when publishing the batch.
+                // This avoids modifying the dictionary that DrawVideoGrid()
+                // may currently be enumerating on the UI thread.
+                var updatedResults =
+                    new Dictionary<string, List<VideoSearchEntry>>(
+                        browseVideoResults);
+
+                foreach (var loadedTopic in loadedBatch)
+                {
+                    if (loadedTopic.Results.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    updatedResults[loadedTopic.Name] =
+                        loadedTopic.Results;
+                }
+
+                browseVideoResults = updatedResults;
+            }
+
+            browseVideoCacheTime = DateTime.UtcNow;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning(
+                $"[Browse Videos] Failed to load videos: {exception.Message}");
+
+            browseVideoResults = [];
+        }
+        finally
+        {
+            isLoadingBrowseVideos = false;
+        }
+    }
+
+    private async Task LoadFfxivYouTubeAsync()
+    {
+        try
+        {
+            ffxivYouTubeResults = await searchResolver
+                .SearchLatestAggregatedAsync(
+                    [
+                        "ffxiv",
+                    "ff14",
+                    "final fantasy xiv"
+                    ],
+                    10,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning(
+                $"[Home] Failed to load FFXIV YouTube shelf: {exception.Message}");
+
+
+            ffxivYouTubeResults = [];
+        }
+        finally
+        {
+            isLoadingFfxivYouTube = false;
         }
     }
 

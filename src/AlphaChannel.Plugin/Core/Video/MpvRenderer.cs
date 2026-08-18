@@ -52,13 +52,15 @@ namespace AlphaChannel.Plugin.Video
 		private bool _closed = true;
 		private Thread? _eventThread;
 
-		//Set by VideoEngine right after construction - the event loop below runs on its own
-		//background thread, so this is the only path an async mpv-side failure (a bad yt-dlp
-		//resolve, a codec/network error reported well after Play() already returned) has to reach
-		//VideoEngine.LastError. Fires from _eventThread, not the caller's own thread.
-		internal Action<string>? OnError;
-		private readonly Lock _snapshotLock = new();
-		private IntPtr _latestSnapshot;
+        //Set by VideoEngine right after construction - the event loop below runs on its own
+        //background thread, so this is the only path an async mpv-side failure (a bad yt-dlp
+        //resolve, a codec/network error reported well after Play() already returned) has to reach
+        //VideoEngine.LastError. Fires from _eventThread, not the caller's own thread.
+        internal Action<string>? OnError;
+        internal Action? OnFrameRendered;
+
+        private readonly Lock _snapshotLock = new();
+        private IntPtr _latestSnapshot;
 
 		public void Initialize(int width, int height, Texture2D? targetTexture, CancellationTokenSource cancelToken,
 			bool hardwareDecoding = false, int maxQualityHeight = 1080, bool allowInsecureDirectUrls = false,
@@ -83,12 +85,16 @@ namespace AlphaChannel.Plugin.Video
 			_ = mpv_set_option_string(_mpvCtx, "profile", "sw-fast");
 			_ = mpv_set_option_string(_mpvCtx, "ytdl", "yes");
 			_ = mpv_set_option_string(_mpvCtx, "script-opts", $"ytdl_hook-ytdl_path={_resources?.GetLocationYTDLP()}");
-			_ = mpv_set_option_string(_mpvCtx, "ytdl-format", $"bestvideo[height<={maxQualityHeight}][ext=mp4]+bestaudio/best[height<={maxQualityHeight}]");
-			_ = mpv_set_option_string(_mpvCtx, "terminal", "yes");
+            _ = mpv_set_option_string(
+    _mpvCtx,
+    "ytdl-format",
+    $"bestvideo[height<={maxQualityHeight}][ext=mp4]+bestaudio/best[height<={maxQualityHeight}]");
+            _ = mpv_set_option_string(_mpvCtx, "terminal", "yes");
 			_ = mpv_set_option_string(_mpvCtx, "volume", initialVolume.ToString(System.Globalization.CultureInfo.InvariantCulture));
-			_ = mpv_set_option_string(_mpvCtx, "msg-level", "all=warn,ffmpeg=error");
-			var ytdlRawOptions = "force-ipv4=,hls-use-mpegts=";
-			if (useFirefoxCookies && FindFirefoxProfile() is { } firefoxProfile)
+            _ = mpv_set_option_string(_mpvCtx, "msg-level", "all=warn,ffmpeg=error");
+            var ytdlRawOptions =
+     "force-ipv4=,hls-use-mpegts=";
+            if (useFirefoxCookies && FindFirefoxProfile() is { } firefoxProfile)
 			{
 				// Best-effort: reads cookies straight out of a local Firefox profile instead of a
 				// manually exported file. Untested against a Flatpak-sandboxed Firefox specifically
@@ -232,12 +238,21 @@ namespace AlphaChannel.Plugin.Video
 
 					Texture2D texture = _targetTexture;
 					int width = _width;
-					DxHandler.RunOnRenderThread(RenderKey, () =>
-					{
-						DxHandler.Device?.ImmediateContext.UpdateSubresource(texture, 0, null, snapshot, width * 4, 0);
-					});
-					return true;
-				}
+                    DxHandler.RunOnRenderThread(RenderKey, () =>
+                    {
+                        DxHandler.Device?.ImmediateContext.UpdateSubresource(
+                            texture,
+                            0,
+                            null,
+                            snapshot,
+                            width * 4,
+                            0);
+
+                        OnFrameRendered?.Invoke();
+                    });
+
+                    return true;
+                }
 				else
 				{
 					AepLog.Warning($"[MPV] Error rendering frame: RC: {rc} Texture: {_targetTexture}");
@@ -250,65 +265,141 @@ namespace AlphaChannel.Plugin.Video
 			return false;
 		}
 		private readonly Lock _mpvLock = new();
-		public void StopRender()
-		{
-			_closed = true;
-			_cancelToken!.Cancel();
-			DxHandler.CancelRenderThreadWork(RenderKey);
-			lock (_snapshotLock)
-			{
-				_latestSnapshot = IntPtr.Zero;
-			}
+        public void StopRender()
+        {
+            // Tell every loop/callback to stop before touching native resources.
+            _closed = true;
 
-			Task.Run(() =>
-			{
-				lock (_mpvLock)
-				{
-					if (_mpvRenderCtx != IntPtr.Zero)
-					{
-						mpv_render_context_free(_mpvRenderCtx);
-						_mpvRenderCtx = IntPtr.Zero;
-					}
-					if (_updateCallbackHandle.IsAllocated)
-					{
-						_updateCallbackHandle.Free();
-					}
+            try
+            {
+                _cancelToken?.Cancel();
+            }
+            catch
+            {
+                // Cancellation during teardown is best-effort.
+            }
 
-					if (_mpvCtx != IntPtr.Zero)
-					{
-						mpv_terminate_destroy(_mpvCtx);
-						_mpvCtx = IntPtr.Zero;
-					}
+            DxHandler.CancelRenderThreadWork(RenderKey);
 
-					if (_bufferPtr != IntPtr.Zero)
-					{
-						Marshal.FreeHGlobal(_bufferPtr);
-						_bufferPtr = IntPtr.Zero;
-					}
-					if (_snapA != IntPtr.Zero)
-					{
-						Marshal.FreeHGlobal(_snapA);
-						_snapA = IntPtr.Zero;
-					}
-					if (_snapB != IntPtr.Zero)
-					{
-						Marshal.FreeHGlobal(_snapB);
-						_snapB = IntPtr.Zero;
-					}
+            // RenderFrame may currently be asleep waiting for another frame.
+            // Wake it so it can observe _closed and exit.
+            _frameReady?.Set();
 
-					Marshal.FreeHGlobal(_sizePtr);
-					Marshal.FreeHGlobal(_stridePtr);
-					Marshal.FreeHGlobal(_formatPtr);
-					Marshal.FreeHGlobal(_renderParamsPtr);
+            lock (_snapshotLock)
+            {
+                _latestSnapshot = IntPtr.Zero;
+            }
 
-					_targetTexture = null;
-				}
-			});
+            // The event thread calls mpv_wait_event(_mpvCtx).
+            // It must stop BEFORE we destroy _mpvCtx.
+            if (_eventThread is not null &&
+                _eventThread != Thread.CurrentThread)
+            {
+                if (!_eventThread.Join(2000))
+                {
+                    AepLog.Warning(
+                        "[MPV] Event thread did not exit within teardown timeout.");
+                }
+            }
 
-			_eventThread?.Join(2000);
-		}
+            lock (_mpvLock)
+            {
+                if (_mpvRenderCtx != IntPtr.Zero)
+                {
+                    mpv_render_context_free(
+                        _mpvRenderCtx);
 
-		public void Play(string url, double playbackPosition, bool isPlaying)
+                    _mpvRenderCtx =
+                        IntPtr.Zero;
+                }
+
+                if (_updateCallbackHandle.IsAllocated)
+                {
+                    _updateCallbackHandle.Free();
+                }
+
+                if (_mpvCtx != IntPtr.Zero)
+                {
+                    mpv_terminate_destroy(
+                        _mpvCtx);
+
+                    _mpvCtx =
+                        IntPtr.Zero;
+                }
+
+                if (_bufferPtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(
+                        _bufferPtr);
+
+                    _bufferPtr =
+                        IntPtr.Zero;
+                }
+
+                if (_snapA != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(
+                        _snapA);
+
+                    _snapA =
+                        IntPtr.Zero;
+                }
+
+                if (_snapB != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(
+                        _snapB);
+
+                    _snapB =
+                        IntPtr.Zero;
+                }
+
+                if (_sizePtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(
+                        _sizePtr);
+
+                    _sizePtr =
+                        IntPtr.Zero;
+                }
+
+                if (_stridePtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(
+                        _stridePtr);
+
+                    _stridePtr =
+                        IntPtr.Zero;
+                }
+
+                if (_formatPtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(
+                        _formatPtr);
+
+                    _formatPtr =
+                        IntPtr.Zero;
+                }
+
+                if (_renderParamsPtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(
+                        _renderParamsPtr);
+
+                    _renderParamsPtr =
+                        IntPtr.Zero;
+                }
+
+                _targetTexture = null;
+            }
+
+            _eventThread = null;
+
+            AepLog.Debug(
+                "[MPV] Renderer destroyed cleanly.");
+        }
+
+        public void Play(string url, double playbackPosition, bool isPlaying)
 		{
 			if (!_closed)
 			{
@@ -319,13 +410,16 @@ namespace AlphaChannel.Plugin.Video
 					{
 						Stop();
 					}
-					else
-					{
-						string startStr = ((int)playbackPosition).ToString(System.Globalization.CultureInfo.InvariantCulture);
-						string pauseStr = !isPlaying ? ",pause=yes" : string.Empty;
-						_ = mpv_command(_mpvCtx, ["loadfile", url, "replace", "0", $"start={startStr}{pauseStr}", null!]);	
-					}
-				}
+                    else
+                    {
+                        string startStr = ((int)playbackPosition).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        string pauseStr = !isPlaying ? ",pause=yes" : string.Empty;
+
+                        _ = mpv_command(
+                            _mpvCtx,
+                            ["loadfile", url, "replace", "0", $"start={startStr}{pauseStr}", null!]);
+                    }
+                }
 			}
 		}
 
@@ -336,7 +430,6 @@ namespace AlphaChannel.Plugin.Video
 				lock (_mpvLock)
 				{
 					_ = mpv_command(_mpvCtx, ["stop", null!]);
-					_closed = true;
 					_frameReady?.Set();
 				}
 			}
@@ -624,16 +717,72 @@ namespace AlphaChannel.Plugin.Video
 									string? prefix = Marshal.PtrToStringAnsi(Marshal.ReadIntPtr(dataPtr2));
 									string? level  = Marshal.PtrToStringAnsi(Marshal.ReadIntPtr(dataPtr2 + 8));
 									string? text   = Marshal.PtrToStringAnsi(Marshal.ReadIntPtr(dataPtr2 + 16));
-									if (level == "error" && text != null)
-									{
-										// Every other mpv/ytdl error (bot-check, network stall, format
-										// unavailable, ...) used to only reach AepLog.Verbose below, which
-										// is filtered out of the visible log by default - a real failure
-										// looked identical to "still buffering" from the outside, forever.
-										AepLog.Warning($"[MPV/{prefix}/{level}] {text.Trim()}");
-										OnError?.Invoke(text.Trim());
-										Stop();
-									}
+                                    if (level == "error" && text != null)
+                                    {
+                                        var errorText = text.Trim();
+
+                                        AepLog.Warning(
+                                            $"[MPV/{prefix}/{level}] {errorText}");
+
+                                        var isInterruptedTransfer =
+     string.Equals(
+         prefix,
+         "curl",
+         StringComparison.OrdinalIgnoreCase)
+     &&
+     errorText.Contains(
+         "transfer failed",
+         StringComparison.OrdinalIgnoreCase);
+
+                                        var isRecoverableYouTubeFailure =
+                                            errorText.Contains(
+                                                "HTTP error 403",
+                                                StringComparison.OrdinalIgnoreCase)
+                                            ||
+                                            (
+                                                errorText.Contains(
+                                                    "Failed to open",
+                                                    StringComparison.OrdinalIgnoreCase)
+                                                &&
+                                                errorText.Contains(
+                                                    "googlevideo.com",
+                                                    StringComparison.OrdinalIgnoreCase)
+                                            )
+                                            ||
+                                            (
+                                                string.Equals(
+                                                    prefix,
+                                                    "timeline",
+                                                    StringComparison.OrdinalIgnoreCase)
+                                                &&
+                                                errorText.Contains(
+                                                    "failed to load segment",
+                                                    StringComparison.OrdinalIgnoreCase)
+                                            );
+
+                                        // Replacing one stream with another can cause curl to report that the
+                                        // old connection was interrupted. That is expected during a video
+                                        // switch and must NOT stop or close the player.
+                                        if (isInterruptedTransfer)
+                                        {
+                                            AepLog.Debug(
+                                                $"[MPV] Ignoring interrupted transfer while switching media: {errorText}");
+                                        }
+                                        else if (isRecoverableYouTubeFailure)
+                                        {
+                                            OnError?.Invoke(errorText);
+                                        }
+                                        else
+                                        {
+                                            // Report other mpv-side problems, but don't permanently kill the
+                                            // renderer merely because mpv emitted an error-level log message.
+                                            //
+                                            // mpv itself owns the playback state and can recover from many of
+                                            // these messages. Closing the renderer here makes one transient
+                                            // network error destroy the rest of the playback session.
+                                            OnError?.Invoke(errorText);
+                                        }
+                                    }
                                     AepLog.Verbose($"[MPV/{prefix}/{level}] {text?.Trim()}");
                                 }
                                 break;

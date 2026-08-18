@@ -145,15 +145,18 @@ internal static class ThemeCatalog
         MagentaGlow: Hex(0xE879F9),
         Gold: Hex(0xD4AF37),
         GoldHover: Hex(0xE8C547),
-        FrameBg: Hex(0x151B2C),
-        FrameBgHover: Hex(0x1C2438),
+        FrameBg: Hex(0x111827),
+        FrameBgHover: Hex(0x182235),
         Danger: Hex(0xEF4444),
         Good: Hex(0x22C55E),
-        WindowBg: Hex(0x070A12),
-        SidebarBg: Hex(0x0A0E1A),
-        CardBg: Hex(0x121826),
-        CardBgHover: Hex(0x1A2234),
-        MutedText: Hex(0x8B93A7));
+
+        // Media-hub surfaces.
+        WindowBg: Hex(0x050812),
+        SidebarBg: Hex(0x080D18),
+        CardBg: Hex(0x101725),
+        CardBgHover: Hex(0x172033),
+
+        MutedText: Hex(0x8F98AC));
 
     private static readonly ThemeColors Gold = new(
         Accent: Hex(0xD4AF37),

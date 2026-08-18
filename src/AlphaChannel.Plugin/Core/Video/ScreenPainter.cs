@@ -43,11 +43,15 @@ internal sealed unsafe class ScreenPainter : IDisposable
 	internal float Scale = 1.0f;
 
 	private readonly VertexShader _vs;
-	private readonly PixelShader _ps;
-	private readonly PixelShader _glowPs;
-	private readonly PixelShader _titlePs;
-	private readonly PixelShader _reactionsPs;
-	private readonly SamplerState _sampler;
+    private readonly PixelShader _ps;
+    private readonly PixelShader _loadingPs;
+    private readonly PixelShader _glowPs;
+    private readonly PixelShader _titlePs;
+    private readonly PixelShader _reactionsPs;
+
+    private volatile bool _isLoading;
+    private DateTime _loadingStartedAtUtc = DateTime.MinValue;
+    private readonly SamplerState _sampler;
 	private readonly RasterizerState _rasterState;
 	private readonly DepthStencilState _depthState;
 	private readonly BlendState _alphaBlend;
@@ -110,13 +114,13 @@ internal sealed unsafe class ScreenPainter : IDisposable
 		public float TitleAlpha;
 		public fixed float UiRects[MaxUiRects * 4]; //Each rect: screenX, screenY, width, height (pixels).
 
-		//Kept as its own 16-byte-aligned group (float, not int, so there's no int/float3 packing
-		//ambiguity to worry about across the C#/HLSL boundary) before the two reaction arrays.
-		public float ReactionCount;
-		public float ReactionPad0;
-		public float ReactionPad1;
-		public float ReactionPad2;
-		public fixed float ReactionPos[MaxReactions * 4]; //xy = uv center (0..1), z = alpha, w = radius.
+        //Kept as its own 16-byte-aligned group (float, not int, so there's no int/float3 packing
+        //ambiguity to worry about across the C#/HLSL boundary) before the two reaction arrays.
+        public float ReactionCount;
+        public float LoadingTime;
+        public float ReactionPad1;
+        public float ReactionPad2;
+        public fixed float ReactionPos[MaxReactions * 4]; //xy = uv center (0..1), z = alpha, w = radius.
 		public fixed float ReactionColor[MaxReactions * 4]; //rgb = color, a unused.
 	}
 
@@ -135,7 +139,9 @@ internal sealed unsafe class ScreenPainter : IDisposable
 				float glowScale;
 				float titleAlpha;
 				float4 uiRects[MAX_UI_RECTS]; //xy = screen pos, zw = size, in pixels
-				float4 reactionMeta; //x = reaction count (truncated to int in-shader)
+				float4 reactionMeta;
+// x = reaction count
+// y = loading animation time in seconds
 				float4 reactionPos[MAX_REACTIONS]; //xy = uv center, z = alpha, w = radius
 				float4 reactionColor[MAX_REACTIONS]; //rgb = color
 			};
@@ -160,6 +166,96 @@ internal sealed unsafe class ScreenPainter : IDisposable
 
 			Texture2D tex : register(t0);
 			SamplerState smp : register(s0);
+
+float4 LoadingPS(VOut i, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
+{
+    for (int r = 0; r < uiRectCount; r++)
+    {
+        float4 rect = uiRects[r];
+
+        if (i.pos.x >= rect.x && i.pos.x < rect.x + rect.z &&
+            i.pos.y >= rect.y && i.pos.y < rect.y + rect.w)
+        {
+            discard;
+        }
+    }
+    // Keep the physical back of the screen behaving exactly like the normal
+    // video shader instead of mirroring the loading artwork.
+    if (!isFrontFace)
+    {
+        return float4(0.333, 0.333, 0.333, 1.0);
+    }
+
+
+    // Deep blue/purple background.
+    float2 uv = i.uv;
+    float3 bgTop    = float3(0.025, 0.020, 0.075);
+    float3 bgBottom = float3(0.008, 0.010, 0.030);
+    float3 color = lerp(bgTop, bgBottom, uv.y);
+
+
+    // Very subtle purple illumination behind the spinner.
+    float2 center = float2(0.5, 0.43);
+    float2 p = uv - center;
+    p.x *= SCREEN_ASPECT;
+
+
+    float d = length(p);
+    float halo = 1.0 - smoothstep(0.05, 0.36, d);
+    color += float3(0.15, 0.035, 0.32) * halo * 0.32;
+
+
+    // Animated circular spinner.
+    float radius = 0.095;
+    float thickness = 0.012;
+
+
+    float ring =
+        smoothstep(radius + thickness, radius, d) *
+        smoothstep(radius - thickness, radius, d);
+
+
+    float angle = atan2(p.y, p.x);
+    float phase = angle - reactionMeta.y * 3.0;
+
+
+    // Bright head with a fading tail around the ring.
+    float wrapped = frac(phase / 6.2831853 + 1.0);
+    float spinnerAlpha = pow(wrapped, 2.4);
+
+
+    float3 dimPurple = float3(0.20, 0.07, 0.38);
+    float3 hotPurple = float3(0.72, 0.28, 1.00);
+    float3 spinner = lerp(dimPurple, hotPurple, spinnerAlpha);
+
+
+    color = lerp(color, spinner, ring * (0.25 + spinnerAlpha * 0.75));
+
+
+    // Small bright spinner head.
+    float headAngle = reactionMeta.y * 3.0;
+    float2 head =
+        center +
+        float2(cos(headAngle), sin(headAngle)) *
+        float2(radius / SCREEN_ASPECT, radius);
+
+
+    float2 hp = uv - head;
+    hp.x *= SCREEN_ASPECT;
+
+
+    float headGlow =
+        1.0 - smoothstep(0.0, 0.022, length(hp));
+
+
+    color += float3(0.55, 0.20, 1.0) * headGlow;
+
+
+    
+
+
+    return float4(saturate(color), 1.0);
+}
 
 			float4 PS(VOut i, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 			{
@@ -296,18 +392,21 @@ internal sealed unsafe class ScreenPainter : IDisposable
 				return accum;
 			}";
 
-		using (var vsb = ShaderBytecode.Compile(hlsl, "VS", "vs_4_0"))
-		using (var psb = ShaderBytecode.Compile(hlsl, "PS", "ps_4_0"))
-		using (var glowPsb = ShaderBytecode.Compile(hlsl, "GlowPS", "ps_4_0"))
-		using (var titlePsb = ShaderBytecode.Compile(hlsl, "TitlePS", "ps_4_0"))
-		using (var reactionsPsb = ShaderBytecode.Compile(hlsl, "ReactionsPS", "ps_4_0"))
-		{
-			_vs = new VertexShader(DxHandler.Device, vsb);
-			_ps = new PixelShader(DxHandler.Device, psb);
-			_glowPs = new PixelShader(DxHandler.Device, glowPsb);
-			_titlePs = new PixelShader(DxHandler.Device, titlePsb);
-			_reactionsPs = new PixelShader(DxHandler.Device, reactionsPsb);
-		}
+        using (var vsb = ShaderBytecode.Compile(hlsl, "VS", "vs_4_0"))
+        using (var psb = ShaderBytecode.Compile(hlsl, "PS", "ps_4_0"))
+        using (var loadingPsb = ShaderBytecode.Compile(hlsl, "LoadingPS", "ps_4_0"))
+        using (var glowPsb = ShaderBytecode.Compile(hlsl, "GlowPS", "ps_4_0"))
+        using (var titlePsb = ShaderBytecode.Compile(hlsl, "TitlePS", "ps_4_0"))
+        using (var reactionsPsb = ShaderBytecode.Compile(hlsl, "ReactionsPS", "ps_4_0"))
+        {
+            _vs = new VertexShader(DxHandler.Device, vsb);
+            _ps = new PixelShader(DxHandler.Device, psb);
+            _loadingPs = new PixelShader(DxHandler.Device, loadingPsb);
+            _glowPs = new PixelShader(DxHandler.Device, glowPsb);
+            _titlePs = new PixelShader(DxHandler.Device, titlePsb);
+            _reactionsPs = new PixelShader(DxHandler.Device, reactionsPsb);
+        }
+    
 
 		_sampler = new SamplerState(DxHandler.Device, new SamplerStateDescription
 		{
@@ -358,8 +457,18 @@ internal sealed unsafe class ScreenPainter : IDisposable
 		DxHandler.OnPresent += DrawIfReady;
 	}
 
-	//Called from VideoEngine whenever the active video texture changes. Pass null to stop painting.
-	internal void SetTarget(Texture2D? texture)
+    internal void SetLoading(bool loading)
+    {
+        _isLoading = loading;
+
+        if (loading)
+        {
+            _loadingStartedAtUtc = DateTime.UtcNow;
+        }
+    }
+
+    //Called from VideoEngine whenever the active video texture changes. Pass null to stop painting.
+    internal void SetTarget(Texture2D? texture)
 	{
 		if (ReferenceEquals(texture, _texture))
 		{
@@ -448,7 +557,8 @@ internal sealed unsafe class ScreenPainter : IDisposable
 	//depth buffer straight out of FFXIVClientStructs (no context hook needed) and draws into them.
 	private void DrawIfReady()
 	{
-		if (!TryGetSceneTargets(out nint rtvPtr, out nint dsvPtr, out uint targetWidth, out uint targetHeight) || _srv == null)
+    
+    if (!TryGetSceneTargets(out nint rtvPtr, out nint dsvPtr, out uint targetWidth, out uint targetHeight) || _srv == null)
 		{
 			return;
 		}
@@ -501,11 +611,20 @@ internal sealed unsafe class ScreenPainter : IDisposable
 
 		try
 		{
-			var p = new ScreenParams { WorldViewProj = worldViewProj.Value, Curvature = Curvature, TitleAlpha = titleAlpha };
-			p.UiRectCount = CollectUiRects(ref p);
-			CollectReactions(ref p);
+            var p = new ScreenParams
+            {
+                WorldViewProj = worldViewProj.Value,
+                Curvature = Curvature,
+                TitleAlpha = titleAlpha,
+                LoadingTime = _isLoading
+                    ? (float)(DateTime.UtcNow - _loadingStartedAtUtc).TotalSeconds
+                    : 0f
+            };
 
-			ctx.OutputMerger.SetRenderTargets(dsv, rtv);
+            p.UiRectCount = CollectUiRects(ref p);
+            CollectReactions(ref p);
+
+            ctx.OutputMerger.SetRenderTargets(dsv, rtv);
 			//Explicit full-target viewport - we never set this before, so whatever viewport the game's last
 			//draw call before Present left bound (could be a sub-region: UI element, shadow pass, anything)
 			//stayed active, meaning our correctly-computed NDC(0,0) landed at that viewport's center instead
@@ -521,9 +640,9 @@ internal sealed unsafe class ScreenPainter : IDisposable
 			ctx.PixelShader.SetShaderResource(0, _srv);
 			ctx.PixelShader.SetSampler(0, _sampler);
 
-			//Glow first, so the sharp screen quad drawn right after composites on top of it.
-			if (glowWorldViewProj != null)
-			{
+        //Glow first, so the sharp screen quad drawn right after composites on top of it.
+        if (!_isLoading && glowWorldViewProj != null)
+        {
 				ScreenParams glowParams = p;
 				glowParams.WorldViewProj = glowWorldViewProj.Value;
 				glowParams.GlowScale = GlowScale;
@@ -539,14 +658,14 @@ internal sealed unsafe class ScreenPainter : IDisposable
 			ScreenParams* pp = &p;
 			ctx.UpdateSubresource(new SharpDX.DataBox((nint)pp), _cbuf);
 
-			ctx.OutputMerger.BlendState = null;
-			ctx.PixelShader.Set(_ps);
-			ctx.Draw(VertexCount, 0);
+        ctx.OutputMerger.BlendState = null;
+        ctx.PixelShader.Set(_isLoading ? _loadingPs : _ps);
+        ctx.Draw(VertexCount, 0);
 
-			//Now-playing banner, composited on top of the sharp quad - same worldViewProj/cbuffer already
-			//bound from the main draw above, just a different pixel shader and a second texture.
-			if (titleSrv != null && titleAlpha > 0f)
-			{
+        //Now-playing banner, composited on top of the sharp quad - same worldViewProj/cbuffer already
+        //bound from the main draw above, just a different pixel shader and a second texture.
+        if (!_isLoading && titleSrv != null && titleAlpha > 0f)
+        {
 				ctx.OutputMerger.BlendState = _alphaBlend;
 				ctx.PixelShader.Set(_titlePs);
 				ctx.PixelShader.SetShaderResource(1, titleSrv);
@@ -554,12 +673,12 @@ internal sealed unsafe class ScreenPainter : IDisposable
 				ctx.PixelShader.SetShaderResource(1, null);
 			}
 
-			//Reactions, drawn on top of everything - same worldViewProj/cbuffer already bound and
-			//uploaded from the main draw above (CollectReactions filled p's reaction fields before
-			//that single UpdateSubresource call), no texture involved so no second shader resource
-			//slot to bind/unbind either.
-			if (p.ReactionCount > 0)
-			{
+        //Reactions, drawn on top of everything - same worldViewProj/cbuffer already bound and
+        //uploaded from the main draw above (CollectReactions filled p's reaction fields before
+        //that single UpdateSubresource call), no texture involved so no second shader resource
+        //slot to bind/unbind either.
+        if (!_isLoading && p.ReactionCount > 0)
+        {
 				ctx.OutputMerger.BlendState = _alphaBlend;
 				ctx.PixelShader.Set(_reactionsPs);
 				ctx.Draw(VertexCount, 0);
@@ -762,10 +881,11 @@ internal sealed unsafe class ScreenPainter : IDisposable
 		_depthState.Dispose();
 		_rasterState.Dispose();
 		_sampler.Dispose();
-		_titlePs.Dispose();
-		_reactionsPs.Dispose();
-		_glowPs.Dispose();
-		_ps.Dispose();
-		_vs.Dispose();
-	}
+        _titlePs.Dispose();
+        _reactionsPs.Dispose();
+        _glowPs.Dispose();
+        _loadingPs.Dispose();
+        _ps.Dispose();
+        _vs.Dispose();
+    }
 }

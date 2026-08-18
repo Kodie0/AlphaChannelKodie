@@ -40,7 +40,7 @@ internal sealed partial class MainWindow : Window, IDisposable
     private static Vector4 CardBg => FadeForCustomBg(Colors.CardBg, 0.25f);
     private static Vector4 CardBgHover => FadeForCustomBg(Colors.CardBgHover, 0.35f);
     private static Vector4 MutedText => Colors.MutedText;
-    private static readonly Vector4 BorderSubtle = new(1f, 1f, 1f, 0.06f);
+    private static readonly Vector4 BorderSubtle = new(1f, 1f, 1f, 0.085f);
     private ISharedImmediateTexture? alphaIconImage;
 
     // Set each frame in Draw() when a custom background texture is actually showing.
@@ -59,6 +59,7 @@ internal sealed partial class MainWindow : Window, IDisposable
     {
         Home,
         Player,
+        VideoGrid,
         Screen,
         WatchAlong,
         Friends,
@@ -96,10 +97,9 @@ internal sealed partial class MainWindow : Window, IDisposable
     // played character - the callback (Plugin.cs) is what actually writes Cfg.CharacterSessions and
     // saves, same split as requestRename above (MainWindow owns the UI, Plugin.cs owns persistence).
     private readonly Action<CharacterSession?> onSessionChanged;
-
-    // Room for left nav + center + optional right rail + bottom media bar (mockup chrome).
-    private static readonly Vector2 WindowSize = new(1100, 860);
-    private static readonly Vector2 MiniModeSize = new(260, 860);
+    // Wide media-hub layout: left navigation + spacious content + social rail + compact player bar.
+    private static readonly Vector2 WindowSize = new(1400, 840);
+    private static readonly Vector2 MiniModeSize = new(260, 840);
     // Compact capsule chrome while tucked away - wide enough for brand + expand + close.
     private static readonly Vector2 MinimizedSize = new(276, 40);
     // Wider capsule when "Watching First Last" is showing (viewer-only join).
@@ -121,9 +121,9 @@ internal sealed partial class MainWindow : Window, IDisposable
     private string joinHostNameInput = string.Empty;
     private string? joinError;
 
-    private const float SidebarWidth = 200f;
-    private const float RightRailWidth = 260f;
-    private const float BottomBarHeight = 104f;
+    private const float SidebarWidth = 185f;
+    private const float RightRailWidth = 300f;
+    private const float BottomBarHeight = 78f;
 
     // Borderless Child windows ignore WindowPadding in this ImGui build unless AlwaysUseWindowPadding
     // is set. NoScrollbar keeps chrome panes clean (navbar / cards / rails).
@@ -445,6 +445,43 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    private static void HandleHomeDragScroll()
+    {
+        // Mouse wheel scrolling is handled natively by ImGui.
+        // This adds click-and-drag scrolling when dragging empty Home background.
+        if (!ImGui.IsWindowHovered())
+        {
+            return;
+        }
+
+        // Don't steal drags from buttons, media cards, search inputs, etc.
+        if (ImGui.IsAnyItemHovered() ||
+            ImGui.IsAnyItemActive())
+        {
+            return;
+        }
+
+        if (!ImGui.IsMouseDragging(
+                ImGuiMouseButton.Left,
+                4f))
+        {
+            return;
+        }
+
+        var delta = ImGui.GetIO().MouseDelta.Y;
+
+        if (MathF.Abs(delta) < 0.01f)
+        {
+            return;
+        }
+
+        ImGui.SetScrollY(
+            Math.Clamp(
+                ImGui.GetScrollY() - delta,
+                0f,
+                ImGui.GetScrollMaxY()));
+    }
+
     public override void Draw()
     {
         Colors = ThemeCatalog.Get(Plugin.Cfg.UiTheme, Plugin.Cfg.UiBackground);
@@ -499,9 +536,17 @@ internal sealed partial class MainWindow : Window, IDisposable
 
             // Settings keeps a scrollbar so the long preferences sheet stays usable;
             // every other page hides chrome scrollbars.
-            var contentFlags = currentPage == HomePage.Settings
-                ? ImGuiWindowFlags.AlwaysUseWindowPadding
-                : PaddedChild | ImGuiWindowFlags.NoScrollWithMouse;
+            var contentFlags = currentPage switch
+            {
+                HomePage.Settings =>
+                    ImGuiWindowFlags.AlwaysUseWindowPadding,
+
+                HomePage.Home =>
+                    PaddedChild | ImGuiWindowFlags.NoScrollbar,
+
+                _ =>
+                    PaddedChild | ImGuiWindowFlags.NoScrollWithMouse,
+            };
 
             var contentOrigin = ImGui.GetCursorScreenPos();
 
@@ -509,14 +554,19 @@ internal sealed partial class MainWindow : Window, IDisposable
                 ImGuiStyleVar.WindowPadding,
                 new Vector2(24, 18)))
             using (var content = ImRaii.Child(
-                "##content",
-                new Vector2(centerWidth, topHeight),
-                false,
-                contentFlags))
+    "##content",
+    new Vector2(centerWidth, topHeight),
+    false,
+    contentFlags))
             {
                 if (content)
                 {
                     DrawContent();
+
+                    if (currentPage == HomePage.Home)
+                    {
+                        HandleHomeDragScroll();
+                    }
                 }
             }
 
@@ -568,10 +618,8 @@ internal sealed partial class MainWindow : Window, IDisposable
             }
         }
 
-        ImGui.SetCursorPosY(ImGui.GetCursorPosY() - 10f);
-
         using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
-        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(24, 14)))
+        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(20, 10)))
         using (var bottom = ImRaii.Child("##bottomBar", new Vector2(avail.X, BottomBarHeight), false,
             NavPaneFlags))
         {
@@ -583,6 +631,8 @@ internal sealed partial class MainWindow : Window, IDisposable
 
         // Overlay last — its own ImGui window so clicks aren't eaten by the content/rail children.
         DrawWindowControlsStrip();
+
+        DrawPlaybackErrorToast();
     }
 
     // No title bar means no native minimize/close chrome - these two replace it. Minimize collapses
@@ -787,7 +837,7 @@ internal sealed partial class MainWindow : Window, IDisposable
     private void DrawContent()
     {
         // Still parked from launch cut — bounce home if somehow selected.
-        if (currentPage is HomePage.WatchAlong or HomePage.Activity
+        if (currentPage is HomePage.Activity
             or HomePage.Venues or HomePage.GoLive)
         {
             currentPage = HomePage.Home;
@@ -799,7 +849,17 @@ internal sealed partial class MainWindow : Window, IDisposable
                 DrawHome();
                 break;
             case HomePage.Player:
-                PageTitle("Player", "Play something, then watch together.");
+                PageTitle("Browse", "Find something to watch.");
+                DrawPlayerPage();
+                break;
+            case HomePage.VideoGrid:
+                PageTitle(
+                    "Browse Videos",
+                    "Discover the latest videos from your topics.");
+                DrawVideoGrid();
+                break;
+            case HomePage.WatchAlong:
+                PageTitle("Watch Party", "Host or join a room and watch together.");
                 DrawPlayerPage();
                 break;
             case HomePage.Screen:
@@ -843,37 +903,56 @@ internal sealed partial class MainWindow : Window, IDisposable
         var min = ImGui.GetWindowPos();
         var max = min + ImGui.GetWindowSize();
 
-        // Outer falloff (largest → smallest). Wider + softer so it reads as glow, not a stroke.
-        for (var layer = 7; layer >= 1; layer--)
+        // Very restrained violet halo — enough to separate the window from the game,
+        // but no longer reads as an RGB/neon frame.
+        for (var layer = 3; layer >= 1; layer--)
         {
-            var outset = layer * 2.25f;
-            var alpha = 0.028f + (8 - layer) * 0.018f;
-            var t = layer / 7f;
-            var glow = new Vector4(
-                MagentaGlow.X + (BlueGlow.X - MagentaGlow.X) * (1f - t),
-                MagentaGlow.Y + (BlueGlow.Y - MagentaGlow.Y) * (1f - t),
-                MagentaGlow.Z + (BlueGlow.Z - MagentaGlow.Z) * (1f - t),
-                alpha);
+            var outset = layer * 2f;
+            var alpha = 0.018f + (4 - layer) * 0.012f;
+
             drawList.AddRect(
                 min - new Vector2(outset, outset),
                 max + new Vector2(outset, outset),
-                ImGui.GetColorU32(glow),
-                rounding + outset * 0.55f,
+                ImGui.GetColorU32(
+                    new Vector4(
+                        Accent.X,
+                        Accent.Y,
+                        Accent.Z,
+                        alpha)),
+                rounding + outset * 0.45f,
                 ImDrawFlags.None,
-                2.2f + layer * 0.35f);
+                1.5f + layer * 0.25f);
         }
 
-        // Accent rim sitting on the window edge.
-        drawList.AddRect(min + new Vector2(0.5f, 0.5f), max - new Vector2(0.5f, 0.5f),
-            ImGui.GetColorU32(new Vector4(Accent.X, Accent.Y, Accent.Z, 0.95f)), rounding,
-            ImDrawFlags.None, 1.6f);
+        // Thin muted violet perimeter.
+        drawList.AddRect(
+            min + new Vector2(0.5f, 0.5f),
+            max - new Vector2(0.5f, 0.5f),
+            ImGui.GetColorU32(
+                new Vector4(
+                    Accent.X,
+                    Accent.Y,
+                    Accent.Z,
+                    0.48f)),
+            rounding,
+            ImDrawFlags.None,
+            1.1f);
 
-        // Cool inner hairline for depth (skip on tiny capsules — reads as a double stroke).
+        // Barely-visible inner edge gives the frame a little depth without introducing cyan.
         if (rounding < max.Y * 0.45f)
         {
-            drawList.AddRect(min + new Vector2(2.5f, 2.5f), max - new Vector2(2.5f, 2.5f),
-                ImGui.GetColorU32(new Vector4(BlueGlow.X, BlueGlow.Y, BlueGlow.Z, 0.28f)),
-                MathF.Max(4f, rounding - 2f), ImDrawFlags.None, 1f);
+            drawList.AddRect(
+                min + new Vector2(2f, 2f),
+                max - new Vector2(2f, 2f),
+                ImGui.GetColorU32(
+                    new Vector4(
+                        1f,
+                        1f,
+                        1f,
+                        0.035f)),
+                MathF.Max(4f, rounding - 2f),
+                ImDrawFlags.None,
+                1f);
         }
     }
 
@@ -922,7 +1001,9 @@ ImGui.GetColorU32(Vector4.One));
         }
 
         DrawNavItem(HomePage.Home, FontAwesomeIcon.Home, "Home");
-        DrawNavItem(HomePage.Player, FontAwesomeIcon.Play, "Player");
+        DrawNavItem(HomePage.Player, FontAwesomeIcon.Search, "Browse");
+        DrawNavItem(HomePage.VideoGrid, FontAwesomeIcon.ThLarge, "Browse Videos");
+        DrawNavItem(HomePage.WatchAlong, FontAwesomeIcon.Users, "Watch Party");
         DrawNavItem(HomePage.Screen, FontAwesomeIcon.Desktop, "Screen");
         DrawNavItem(HomePage.Friends, FontAwesomeIcon.UserFriends, "Friends", friendRequests.Incoming.Length);
         var appsActive = currentPage is HomePage.Apps or HomePage.Messages or HomePage.PluginHub

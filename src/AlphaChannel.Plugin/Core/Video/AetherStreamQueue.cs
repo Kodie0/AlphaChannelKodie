@@ -220,7 +220,15 @@ internal sealed class AetherStreamQueue
         }
 
         var idle = video.IsIdle();
-        if (idle && !wasIdle && autoAdvanceArmed && Current is not null)
+
+        if (video.State == VideoPlaybackState.Failed)
+        {
+            autoAdvanceArmed = false;
+        }
+        else if (idle &&
+                 !wasIdle &&
+                 autoAdvanceArmed &&
+                 Current is not null)
         {
             autoAdvanceArmed = false;
             Advance();
