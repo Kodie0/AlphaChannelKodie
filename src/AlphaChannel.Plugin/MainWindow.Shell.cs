@@ -33,6 +33,11 @@ internal sealed partial class MainWindow
     private string? customHomeHeroError;
     private string chatPlaceholder = "You can chat once you're in a room";
 
+    private double playbackStartedAt;
+    private bool lastPlaybackState;
+    private double playbackStoppedAt;
+    private bool playbackWasActive;
+
     private void EnsureHomeHeroLoaded()
     {
         var path = ResolveHomeHeroPath();
@@ -1147,76 +1152,63 @@ internal sealed partial class MainWindow
         return clicked;
     }
 
-    private void DrawBottomBar()
+    void DrawBottomBar(bool playbackActive)
     {
-        var origin = ImGui.GetCursorScreenPos();
-        var avail = ImGui.GetContentRegionAvail();
+        var windowPos = ImGui.GetWindowPos();
+        var windowSize = ImGui.GetWindowSize();
 
-        const float sideInset = 8f;
-        const float profileW = 150f;
-        const float actionsW = 176f;
-        const float actionsRightPad = 20f;
+        const float height = BottomBarHeight;
 
-        var playing = queue.Current is not null;
-        var rowH = playing ? 88f : 56f;
-        var rowY = origin.Y + MathF.Max(0f, (avail.Y - rowH) * 0.5f);
+        const float sidebarWidth = 195f;
 
-        // Profile + transport only exist in the full UI.
-        if (!miniMode)
+        var targetY = windowPos.Y + windowSize.Y - height;
+
+        var hiddenY = windowPos.Y + windowSize.Y;
+
+        var slidingIn = playbackActive;
+
+        var elapsed = (float)(
+            ImGui.GetTime() -
+            (slidingIn ? playbackStartedAt : playbackStoppedAt));
+
+        var slide = Math.Clamp(
+            elapsed / 0.35f,
+            0f,
+            1f);
+
+        if (!slidingIn)
         {
-            ImGui.SetCursorScreenPos(
-                origin + new Vector2(
-                    sideInset,
-                    rowY - origin.Y));
-
-            DrawBottomProfile(
-                profileW,
-                rowH);
-
-            var transportW = MathF.Max(
-                280f,
-                avail.X
-                - profileW
-                - actionsW
-                - sideInset * 2
-                - actionsRightPad);
-
-            var transportX =
-                origin.X
-                + profileW
-                + sideInset
-                + 20f;
-
-            transportX = MathF.Max(
-                transportX,
-                origin.X + profileW + sideInset + 16f);
-
-            ImGui.SetCursorScreenPos(
-                new Vector2(
-                    transportX,
-                    rowY));
-
-            DrawBottomTransport(
-                transportW,
-                rowH);
+            slide = 1f - slide;
         }
 
-        // Mini/Expand button always occupies the old action-button area.
-        var actionsX = miniMode
-            ? origin.X + (avail.X - actionsW) * 0.5f
-            : origin.X + avail.X - actionsW - actionsRightPad - 4f;
+        slide = slide * slide * (3f - 2f * slide);
 
-        ImGui.SetCursorScreenPos(
-            new Vector2(
-                actionsX,
-                rowY + MathF.Max(0f, (rowH - 56f) * 0.5f)));
+        var y = hiddenY + (targetY - hiddenY) * slide;
 
-        DrawBottomActions(
-            actionsW,
-            MathF.Min(rowH, 62f));
+        var pos = new Vector2(
+            windowPos.X + sidebarWidth,
+            y);
 
-        ImGui.SetCursorScreenPos(origin);
-        ImGui.Dummy(avail);
+        var width = windowSize.X - sidebarWidth;
+
+        ImGui.SetNextWindowPos(pos);
+        ImGui.SetNextWindowSize(new Vector2(width, height));
+
+        using var window = ImRaii.Child(
+            "##bottomTransportOverlay",
+            new Vector2(width, height),
+            false,
+            ImGuiWindowFlags.NoScrollbar |
+            ImGuiWindowFlags.NoScrollWithMouse |
+            ImGuiWindowFlags.NoBackground |
+            ImGuiWindowFlags.NoMove |
+            ImGuiWindowFlags.NoSavedSettings);
+
+        if (window)
+        {
+            DrawBottomTransport(width, height);
+        }
+
     }
 
     private void DrawBottomProfile(float width, float height)
@@ -1305,140 +1297,200 @@ internal sealed partial class MainWindow
     // Spotify-style island: centered prev/play/next, seek with times underneath, volume on the right.
     private void DrawBottomTransportPlaying(VideoQueueEntry current, float width, float height)
     {
+        var barDrawList = ImGui.GetWindowDrawList();
+        var childPos = ImGui.GetWindowPos();
+
+        barDrawList.AddLine(
+childPos + new Vector2(0, 2),
+childPos + new Vector2(width, 2),
+            ImGui.GetColorU32(new Vector4(
+        Accent.X,
+        Accent.Y,
+        Accent.Z,
+        0.14f)),
+           2f);
+
         var (position, duration, isPaused) = video.GetProgress();
         if (!seekDragging)
         {
             seekPreview = position;
-        }
 
-        const float playSize = 34f;
-        const float skipSize = 28f;
-        const float gap = 10f;
-        const float volSliderW = 64f;
-        const float volIconW = 26f;
 
-        var volClusterW = volIconW + 6f + volSliderW;
+            const float playSize = 32f;
+            const float skipSize = 20f;
+            const float gap = 14f;
+            const float volSliderW = 90f;
+            const float volIconW = 26f;
 
-        var controlsW =
-            skipSize + gap +
-            playSize + gap +
-            skipSize;
+            var volClusterW = volIconW + 6f + volSliderW;
 
-        var lineH = ImGui.GetTextLineHeight();
+            var controlsW =
+                skipSize + gap +
+                playSize + gap +
+                skipSize;
 
-        // Title sits left; controls + volume share the rest.
-        var title = Truncate(current.Title, 80);
+            var lineH = ImGui.GetTextLineHeight();
 
-        const float thumbnailWidth = 0f;
+            // Title sits left; controls + volume share the rest.
+            var title = Truncate(current.Title, 80);
 
 
 
-        using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(gap, 4f)))
-        {
-            // --- Top row: title | centered transport | volume ---
-            var topY = 2f;
-            ImGui.SetCursorPos(new Vector2(0f, topY));
+            const float thumbnailWidth = 64f;
 
 
 
-            var volumeGap = 36f;
-
-            var fullClusterW = controlsW + volumeGap + volClusterW;
-
-            var clusterX = (width - fullClusterW) * 0.5f;
-
-            var controlsX = (width - controlsW) * 0.5f - 12f;
-
-            var volX = controlsX + controlsW + 60f;
-
-            // Stop button - separate accent control
-            ImGui.SetCursorPos(new Vector2(
-                170f,
-                topY + (playSize - skipSize) * 0.5f));
-
-            if (DrawTransportStopButton(skipSize))
+            using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(gap, 4f)))
             {
-                queue.Clear();
+                // --- Top row: title | centered transport | volume ---
+                var topY = 14f;
+
+                // --- Left title area ---
+                ImGui.SetCursorPos(new Vector2(
+                    thumbnailWidth + 24f,
+                    topY + 8f));
+
+                ImGui.TextUnformatted(
+                    Truncate(title, 45));
+
+                var thumbX = 8f;
+                var thumbY = topY;
+
+                var drawList = ImGui.GetWindowDrawList();
+
+                var windowPos = ImGui.GetWindowPos();
+
+                var thumbMin = windowPos + new Vector2(thumbX, thumbY);
+                var thumbMax = windowPos + new Vector2(
+                    thumbX + thumbnailWidth,
+                    thumbY + 56f);
+
+                drawList.AddRectFilled(
+    thumbMin,
+    thumbMax,
+    ImGui.GetColorU32(CardBgHover),
+    6f);
+
+                drawList.AddRect(
+                    thumbMin,
+                    thumbMax,
+                    ImGui.GetColorU32(Accent),
+                    6f,
+                    ImDrawFlags.None,
+                    1f);
+
+                // TODO: replace this when video thumbnails exist
+                using (ImRaii.PushFont(UiBuilder.IconFont))
+                {
+                    var icon = FontAwesomeIcon.Play.ToIconString();
+                    var size = ImGui.CalcTextSize(icon);
+
+                    drawList.AddText(
+                        thumbMin +
+                        (thumbMax - thumbMin) / 2 -
+                        size / 2,
+                        ImGui.GetColorU32(Accent),
+                        icon);
+                }
+
+                // Reset cursor after thumbnail drawing
+                ImGui.SetCursorPos(new Vector2(0f, topY));
+
+
+
+                var volumeGap = 36f;
+
+                var fullClusterW = controlsW + volumeGap + volClusterW;
+
+                var clusterX = (width - fullClusterW) * 0.5f;
+                var controlsX =
+     (width - controlsW) * 0.5f;
+
+                var volX = width - volClusterW - 70f;
+
+                // Stop button - far right
+                ImGui.SetCursorPos(new Vector2(
+                    width - skipSize - 42f,
+                    topY + (playSize - skipSize) * 0.5f));
+
+                if (DrawTransportStopButton(skipSize))
+                {
+                    StopPlayback();
+                }
+
+
+                // Center transport
+                ImGui.SetCursorPos(new Vector2(
+                    controlsX,
+                    topY + (playSize - skipSize) * 0.5f));
+
+                if (DrawTransportGhostButton(FontAwesomeIcon.StepBackward, skipSize))
+                {
+                    video.Seek(0);
+                }
+
+                ImGui.SameLine(0, gap);
+
+                ImGui.SetCursorPosY(topY);
+
+                if (DrawTransportPlayButton(isPaused, playSize))
+                {
+                    video.Pause(!isPaused);
+                }
+
+                ImGui.SameLine(0, gap);
+                ImGui.SetCursorPosY(topY + (playSize - skipSize) * 0.5f);
+                if (DrawTransportGhostButton(FontAwesomeIcon.StepForward, skipSize))
+                {
+                    queue.Advance();
+                }
+
+
+                ImGui.SameLine(0, gap);
+
+
+
+                ImGui.SetCursorPos(new Vector2(volX, topY + (playSize - skipSize) * 0.5f));
+                DrawBottomVolume(volIconW, volSliderW, 18f);
+
+                // --- Timestamp under title ---
+                var timeLeft = FormatTime(position);
+                var timeRight = FormatTime(duration);
+
+
+
+                // --- Seek row ---
+                var seekY = topY + playSize + 18f;
+
+                var timeLeftWidth = ImGui.CalcTextSize(timeLeft).X;
+
+                ImGui.SetCursorPos(new Vector2(84f, seekY + 2f));
+
+                ImGui.TextColored(MutedText, timeLeft);
+
+                ImGui.SameLine(0, 8);
+
+                ImGui.SetNextItemWidth(
+                   width - timeLeftWidth - ImGui.CalcTextSize(timeRight).X - 120f);
+
+                using (ImRaii.PushStyle(ImGuiStyleVar.FrameRounding, 6f)
+                           .Push(ImGuiStyleVar.GrabRounding, 6f)
+                           .Push(ImGuiStyleVar.FramePadding, new Vector2(0, 0)))
+                {
+                    ImGui.SliderFloat("##bottomSeek", ref seekPreview, 0f, MathF.Max(duration, 0.01f), "");
+                }
+
+                seekDragging = ImGui.IsItemActive();
+
+                if (ImGui.IsItemDeactivatedAfterEdit())
+                {
+                    video.Seek(seekPreview);
+                }
+
+                ImGui.SameLine(0, 8);
+                ImGui.TextColored(MutedText, timeRight);
+             
             }
-
-
-            // Center transport
-            ImGui.SetCursorPos(new Vector2(
-                controlsX,
-                topY + (playSize - skipSize) * 0.5f));
-
-            if (DrawTransportGhostButton(FontAwesomeIcon.StepBackward, skipSize))
-            {
-                video.Seek(0);
-            }
-
-            ImGui.SameLine(0, gap);
-
-            ImGui.SetCursorPosY(topY);
-
-            if (DrawTransportPlayButton(isPaused, playSize))
-            {
-                video.Pause(!isPaused);
-            }
-
-            ImGui.SameLine(0, gap);
-            ImGui.SetCursorPosY(topY + (playSize - skipSize) * 0.5f);
-            if (DrawTransportGhostButton(FontAwesomeIcon.StepForward, skipSize))
-            {
-                queue.Advance();
-            }
-
-
-            ImGui.SameLine(0, gap);
-
-
-
-            ImGui.SetCursorPos(new Vector2(volX, topY + (playSize - skipSize) * 0.5f));
-            DrawBottomVolume(volIconW, volSliderW, 18f);
-
-            // --- Timestamp under title ---
-            var timeLeft = FormatTime(position);
-            var timeRight = FormatTime(duration);
-
-
-
-            // --- Seek row ---
-            var seekY = topY + playSize + 8f;
-
-            var timeLeftWidth = ImGui.CalcTextSize(timeLeft).X;
-
-            ImGui.SetCursorPos(new Vector2(0f, seekY));
-
-            ImGui.TextColored(MutedText, timeLeft);
-
-            ImGui.SameLine(0, 8);
-
-            ImGui.SetNextItemWidth(
-                width - timeLeftWidth - ImGui.CalcTextSize(timeRight).X - 60f);
-
-            using (ImRaii.PushStyle(ImGuiStyleVar.FrameRounding, 6f)
-                       .Push(ImGuiStyleVar.GrabRounding, 6f)
-                       .Push(ImGuiStyleVar.FramePadding, new Vector2(0, 0)))
-            {
-                ImGui.SliderFloat("##bottomSeek", ref seekPreview, 0f, MathF.Max(duration, 0.01f), "");
-            }
-
-            seekDragging = ImGui.IsItemActive();
-
-            if (ImGui.IsItemDeactivatedAfterEdit())
-            {
-                video.Seek(seekPreview);
-            }
-
-            ImGui.SameLine(0, 8);
-            ImGui.TextColored(MutedText, timeRight);
-            var titleSize = ImGui.CalcTextSize(title);
-
-            ImGui.SetCursorPos(new Vector2(
-                (width - titleSize.X) * 0.5f,
-                seekY + 20f));
-
-            ImGui.TextUnformatted(title);
         }
     }
 

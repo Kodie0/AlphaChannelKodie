@@ -184,6 +184,73 @@ internal sealed partial class MainWindow
     }
     private void DrawPlayVideoDrawer()
     {
+        if (pendingPlayerSearch != null)
+        {
+            var pendingSearch =
+                pendingPlayerSearch.Trim();
+
+            switch (playerSourceTab)
+            {
+                case 0:
+                    // Link
+                    // Kept in case something else routes here later.
+                    urlInput = pendingSearch;
+                    break;
+
+                case 1:
+                    // YouTube
+                    searchQuery = pendingSearch;
+                    searchResults = null;
+
+                    if (!string.IsNullOrWhiteSpace(searchQuery) &&
+                        !isSearching)
+                    {
+                        isSearching = true;
+
+                        _ = RunSearchAsync(
+                            searchQuery);
+                    }
+
+                    break;
+
+                case 2:
+                    // Twitch
+                    twitchChannelInput = pendingSearch;
+                    twitchResult = null;
+                    twitchError = null;
+
+                    if (!string.IsNullOrWhiteSpace(twitchChannelInput) &&
+                        !isCheckingTwitch)
+                    {
+                        isCheckingTwitch = true;
+
+                        _ = RunTwitchCheckAsync(
+                            twitchChannelInput);
+                    }
+
+                    break;
+
+                case 3:
+                    // Dailymotion
+                    dailymotionSearchQuery = pendingSearch;
+                    dailymotionSearchResults = null;
+                    dailymotionSearchError = null;
+
+                    if (!string.IsNullOrWhiteSpace(dailymotionSearchQuery) &&
+                        !isSearchingDailymotion)
+                    {
+                        isSearchingDailymotion = true;
+
+                        _ = RunDailymotionSearchAsync(
+                            dailymotionSearchQuery);
+                    }
+
+                    break;
+            }
+
+            pendingPlayerSearch = null;
+        }
+
         DrawPlayerSourceTabs();
 
         ImGui.Dummy(new Vector2(0f, 18f));

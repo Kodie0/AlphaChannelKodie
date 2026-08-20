@@ -23,9 +23,14 @@ internal sealed partial class MainWindow
     private int playerSourceTab;
     private string friendSearch = string.Empty;
     private string homeSearch = string.Empty;
+    private string? pendingPlayerSearch;
     private bool homeSearchPopupOpen;
+    private Vector2 homeSearchInputPos;
     private ISharedImmediateTexture? addFriendImage;
     private readonly Dictionary<string, ISharedImmediateTexture?> capabilityImages = new();
+
+    // Constant spacing on right side
+    private const float HomeContentRightInset = 18f;
 
     private const string FeaturedVideoUrl =
     "https://www.youtube.com/watch?v=zTTtd6bnhFs";
@@ -38,6 +43,43 @@ internal sealed partial class MainWindow
 
     private const string FeaturedVideoThumbnail =
         "https://i.ytimg.com/vi/zTTtd6bnhFs/maxresdefault.jpg";
+
+    private sealed record FeaturedSlide(
+    string Url,
+    string VideoId);
+
+    private static readonly FeaturedSlide[] FeaturedSlides =
+    [
+        new(
+        "https://www.youtube.com/watch?v=99uyS9WCV38",
+        "99uyS9WCV38"),
+
+    new(
+        "https://www.youtube.com/watch?v=_Nepqo6ML4Q",
+        "_Nepqo6ML4Q"),
+
+    new(
+        "https://www.youtube.com/watch?v=AO2xe-T-MP4",
+        "AO2xe-T-MP4"),
+
+    new(
+        "https://www.youtube.com/watch?v=ecjI-T1zP-o",
+        "ecjI-T1zP-o"),
+];
+
+    private VideoSearchEntry?[] featuredSlideResults =
+    new VideoSearchEntry?[FeaturedSlides.Length];
+    private bool featuredSlidesRequested;
+
+
+    private int featuredSlideIndex;
+    private int featuredNextSlideIndex = 1;
+
+    private double featuredSlideSettledAt = -1d;
+    private double featuredTransitionStartedAt = -1d;
+
+    private bool featuredTransitioning;
+    private int featuredTransitionDirection = 1;
 
     private ISharedImmediateTexture? GetCapabilityImage(string fileName)
 {
@@ -157,6 +199,18 @@ internal sealed partial class MainWindow
 
     private void DrawHome()
     {
+        const float contentPaddingLeft = 24f;
+
+        ImGui.SetCursorPosX(
+            ImGui.GetCursorPosX() + contentPaddingLeft);
+
+        ImGui.PushStyleVar(
+            ImGuiStyleVar.ItemSpacing,
+            new Vector2(
+                ImGui.GetStyle().ItemSpacing.X,
+                ImGui.GetStyle().ItemSpacing.Y));
+
+        var searchWidth = 430f;
 
         if (!homeYouTubeRequested)
         {
@@ -164,6 +218,13 @@ internal sealed partial class MainWindow
             isLoadingHomeYouTube = true;
 
             _ = LoadHomeYouTubeAsync();
+        }
+
+        if (!featuredSlidesRequested)
+        {
+            featuredSlidesRequested = true;
+
+            _ = LoadFeaturedSlidesAsync();
         }
 
         if (Plugin.Cfg.ShowFfxivYouTubeSection &&
@@ -180,34 +241,7 @@ internal sealed partial class MainWindow
             EnsureHomeHeroLoaded();
         }
 
-        // ---------------------------------------------------------
-        // Search
-        // ---------------------------------------------------------
-
-        var searchWidth = MathF.Min(
-    ImGui.GetContentRegionAvail().X * 0.58f,
-    560f);
-
-        var searchStartX =
-            ImGui.GetCursorPosX() +
-            (ImGui.GetContentRegionAvail().X - searchWidth) * 0.5f;
-
-        ImGui.SetCursorPosX(searchStartX);
-        ImGui.SetNextItemWidth(searchWidth);
-
-        using (ImRaii.PushStyle(
-            ImGuiStyleVar.FrameRounding,
-            18f))
-        using (ImRaii.PushStyle(
-            ImGuiStyleVar.FramePadding,
-            new Vector2(16f, 9f)))
-        {
-            ImGui.InputTextWithHint(
-                "##homeSearch",
-                "Search videos, channels, or paste a link...",
-                ref homeSearch,
-                256);
-        }
+    
 
         var searchActive =
     ImGui.IsItemActive();
@@ -235,10 +269,13 @@ internal sealed partial class MainWindow
         if (!string.IsNullOrWhiteSpace(trimmedSearch))
         {
             var searchMin =
-                ImGui.GetItemRectMin();
+                homeSearchInputPos;
 
             var searchMax =
-                ImGui.GetItemRectMax();
+                homeSearchInputPos +
+                new Vector2(
+                    searchWidth,
+                    ImGui.GetFrameHeight());
 
             var popupPos =
                 new Vector2(
@@ -246,16 +283,13 @@ internal sealed partial class MainWindow
                     searchMax.Y + 6f);
 
 
-
-          
-
             var drawList =
-     ImGui.GetForegroundDrawList();
+                ImGui.GetForegroundDrawList();
 
-var popupSize =
-    new Vector2(
-        searchWidth,
-        looksLikeUrl ? 68f : 142f);
+            var popupSize =
+                new Vector2(
+                    searchWidth,
+                    looksLikeUrl ? 108f : 142f);
 
             drawList.AddRectFilled(
                 popupPos,
@@ -276,20 +310,21 @@ var popupSize =
                 suggestionText = $"▶  Search \"{trimmedSearch}\" on YouTube";
             }
 
-            var rowHeight = looksLikeUrl ? 52f : 38f;
+            var rowHeight = looksLikeUrl ? 44f : 38f;
             var rowSpacing = 4f;
 
             var rows = looksLikeUrl
-      ? new[]
-      {
-        "▶  Play video"
-      }
-      : new[]
-      {
+                ? new[]
+                {
+        "▶  Play video",
+        "+  Add video to queue"
+                }
+                : new[]
+                {
         $"▶  Search \"{trimmedSearch}\" on YouTube",
         $"▶  Search \"{trimmedSearch}\" on Dailymotion",
         $"▶  Find Twitch channel \"{trimmedSearch}\""
-      };
+                };
 
             for (int i = 0; i < rows.Length; i++)
             {
@@ -305,28 +340,137 @@ var popupSize =
                         searchWidth - 16f,
                         rowHeight);
 
+                // ---------------------------------------------------------
+                // Hover detection
+                // ---------------------------------------------------------
+
+                var mousePos = ImGui.GetMousePos();
+
+                var rowHovered =
+                    mousePos.X >= rowMin.X &&
+                    mousePos.X <= rowMax.X &&
+                    mousePos.Y >= rowMin.Y &&
+                    mousePos.Y <= rowMax.Y;
+
+                // ---------------------------------------------------------
+                // Row background
+                // ---------------------------------------------------------
+
                 drawList.AddRectFilled(
                     rowMin,
                     rowMax,
                     ImGui.GetColorU32(
-                        new Vector4(
-                            0.12f,
-                            0.15f,
-                            0.22f,
-                            1f)),
+                        rowHovered
+                            ? new Vector4(
+                                Accent.X,
+                                Accent.Y,
+                                Accent.Z,
+                                0.18f)
+                            : new Vector4(
+                                0.12f,
+                                0.15f,
+                                0.22f,
+                                1f)),
                     6f);
+
+                // ---------------------------------------------------------
+                // Row text
+                // ---------------------------------------------------------
 
                 drawList.AddText(
                     rowMin + new Vector2(12f, 8f),
                     ImGui.GetColorU32(Vector4.One),
                     rows[i]);
 
-                if (looksLikeUrl && i == 0)
+                if (looksLikeUrl)
                 {
+                    var displayUrl =
+                        trimmedSearch.Length > 62
+                            ? trimmedSearch[..59] + "..."
+                            : trimmedSearch;
+
                     drawList.AddText(
-                        rowMin + new Vector2(12f, 25f),
+                        rowMin + new Vector2(12f, 24f),
                         ImGui.GetColorU32(MutedText),
-                        trimmedSearch);
+                        displayUrl);
+                }
+
+                // ---------------------------------------------------------
+                // Mouse cursor
+                // ---------------------------------------------------------
+
+                if (rowHovered)
+                {
+                    ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                }
+
+                // ---------------------------------------------------------
+                // Click
+                // ---------------------------------------------------------
+
+                if (rowHovered &&
+    ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+                {
+                    if (looksLikeUrl)
+                    {
+                        switch (i)
+                        {
+                            case 0:
+                                // Play immediately, stay on Home.
+                                queue.PlayNow(
+                                    new VideoQueueEntry(
+                                        trimmedSearch,
+                                        trimmedSearch,
+                                        string.Empty,
+                                        null,
+                                        null));
+                                break;
+
+                            case 1:
+                                // Add to queue, stay on Home.
+                                queue.Add(
+                                    new VideoQueueEntry(
+                                        trimmedSearch,
+                                        trimmedSearch,
+                                        string.Empty,
+                                        null,
+                                        null));
+
+                                queueAddedFeedbackUntil =
+                                    ImGui.GetTime() + 2.0;
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        switch (i)
+                        {
+                            case 0:
+                                // YouTube
+                                OpenPlayerSearch(
+                                    1,
+                                    trimmedSearch);
+                                break;
+
+                            case 1:
+                                // Dailymotion
+                                OpenPlayerSearch(
+                                    3,
+                                    trimmedSearch);
+                                break;
+
+                            case 2:
+                                // Twitch
+                                OpenPlayerSearch(
+                                    2,
+                                    trimmedSearch);
+                                break;
+                        }
+                    }
+
+                    // Clear the Home search after ANY action.
+                    homeSearch = string.Empty;
+                    homeSearchPopupOpen = false;
                 }
             }
 
@@ -339,7 +483,199 @@ var popupSize =
 
 
 
-        ImGui.Dummy(new Vector2(0f, 10f));
+        ImGui.Dummy(new Vector2(0f, -6f));
+
+
+        // ---------------------------------------------------------
+        // Header row
+        // ---------------------------------------------------------
+
+        var contentWidth = ImGui.GetContentRegionAvail().X;
+        var startX = ImGui.GetCursorPosX();
+        var headerY = ImGui.GetCursorPosY();
+
+
+        // ---------------------------------------------------------
+        // Left: Welcome text
+        // ---------------------------------------------------------
+
+        ImGui.SetCursorPos(
+            new Vector2(
+                startX + 25f,
+                headerY + 6f));
+
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            ImGui.TextColored(
+                Accent,
+                FontAwesomeIcon.Users.ToIconString());
+        }
+
+        ImGui.SameLine(0, 8);
+
+        ImGui.SetWindowFontScale(1.08f);
+
+        ImGui.TextColored(
+            MutedText,
+            "Welcome to ");
+
+        ImGui.SameLine(0, 0);
+
+        ImGui.TextColored(
+            Accent,
+            "Alpha Channel");
+
+        ImGui.SetWindowFontScale(1f);
+
+
+        // ---------------------------------------------------------
+        // Centre: Search bar
+        // ---------------------------------------------------------
+
+        ImGui.SetCursorPos(
+            new Vector2(
+                startX + (contentWidth - searchWidth) * 0.5f,
+                headerY));
+
+
+        ImGui.SetNextItemWidth(searchWidth);
+
+
+
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.FrameRounding,
+            18f))
+        {
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.FramePadding,
+                new Vector2(36f, 9f)))
+            {
+                homeSearchInputPos =
+                    ImGui.GetCursorScreenPos();
+
+                ImGui.InputTextWithHint(
+                    "##homeSearch",
+                    "Search videos, channels, or paste a link...",
+                    ref homeSearch,
+                    256);
+
+
+            }
+        }
+
+
+        // ---------------------------------------------------------
+        // Search icon reserved area
+        // ---------------------------------------------------------
+
+        var searchDrawList =
+            ImGui.GetWindowDrawList();
+
+        var searchHeight =
+            ImGui.GetFrameHeight();
+
+        var iconAreaMin =
+            homeSearchInputPos +
+            new Vector2(2f, 2f);
+
+        var iconAreaMax =
+            homeSearchInputPos +
+            new Vector2(
+                35f,
+                searchHeight - 2f);
+
+        var iconAreaColor =
+    ImGui.GetColorU32(FrameBg);
+
+        // Cover any horizontally-scrolled text that would otherwise
+        // slide underneath the magnifying glass.
+        searchDrawList.AddRectFilled(
+            iconAreaMin,
+            iconAreaMax,
+            iconAreaColor,
+            16f,
+            ImDrawFlags.RoundCornersLeft);
+
+
+        // ---------------------------------------------------------
+        // Search icon
+        // ---------------------------------------------------------
+
+        var iconPos =
+            homeSearchInputPos +
+            new Vector2(14f, 7f);
+
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            searchDrawList.AddText(
+                iconPos,
+                ImGui.GetColorU32(Accent),
+                FontAwesomeIcon.Search.ToIconString());
+        }
+
+
+        // ---------------------------------------------------------
+        // Right: watchers
+        // ---------------------------------------------------------
+
+        var watcherText =
+            $"● {usersOnlineCount} Watchers Online";
+
+        var watcherWidth =
+            ImGui.CalcTextSize(watcherText).X;
+
+        ImGui.SetCursorPos(
+            new Vector2(
+                startX + contentWidth - watcherWidth - 55f,
+                headerY + 6f));
+
+        ImGui.TextColored(
+            Good,
+            watcherText);
+
+
+        ImGui.SetWindowFontScale(1f);
+        ImGui.Dummy(new Vector2(0f, 2f));
+
+        var subtitle =
+      "Your shared video space in FFXIV — watch together, anywhere in Eorzea.";
+
+        var icon =
+            FontAwesomeIcon.PlayCircle.ToIconString();
+
+        float iconWidth;
+
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            iconWidth =
+                ImGui.CalcTextSize(icon).X;
+        }
+
+        var subtitleWidth =
+            ImGui.CalcTextSize(subtitle).X;
+
+        var totalWidth =
+            iconWidth + 8f + subtitleWidth;
+
+        var subtitleStartX =
+            startX + (contentWidth - totalWidth) * 0.5f;
+
+
+        ImGui.SetCursorPosX(subtitleStartX);
+
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            ImGui.TextColored(
+                Accent,
+                icon);
+        }
+
+        ImGui.SameLine(0, 8);
+
+        ImGui.TextColored(
+            MutedText,
+            subtitle);
+        ImGui.Dummy(new Vector2(0f, 0f));
 
         // ---------------------------------------------------------
         // Featured
@@ -354,22 +690,20 @@ var popupSize =
 
         DrawHomeYouTubeShelf();
 
-        ImGui.Dummy(new Vector2(0f, -12f));
+        ImGui.Dummy(new Vector2(0f, 10f));
 
         DrawWatchPartiesShelf();
 
         if (Plugin.Cfg.ShowFfxivYouTubeSection)
         {
-            ImGui.Dummy(new Vector2(0f, 20f));
-
+            ImGui.Dummy(new Vector2(0f, 24f));
             DrawFfxivYouTubeShelf();
         }
 
-        ImGui.Dummy(new Vector2(0f, 18f));
+        ImGui.Dummy(new Vector2(0f, 24f));
 
         DrawRecentlyWatchedShelf();
-
-       
+        ImGui.PopStyleVar();
     }
 
 
@@ -416,12 +750,23 @@ var popupSize =
         ImGui.SameLine();
 
         ImGui.SetCursorPosX(
-            ImGui.GetWindowContentRegionMax().X - 22f);
+    ImGui.GetWindowContentRegionMax().X -
+    HomeContentRightInset -
+    22f);
 
         using (ImRaii.PushFont(UiBuilder.IconFont))
         {
+            var refreshHovered =
+                ImGui.IsMouseHoveringRect(
+                    ImGui.GetCursorScreenPos(),
+                    ImGui.GetCursorScreenPos() +
+                    ImGui.CalcTextSize(
+                        FontAwesomeIcon.Sync.ToIconString()));
+
             ImGui.TextColored(
-                AccentHover,
+                refreshHovered
+                    ? AccentHover
+                    : MutedText,
                 FontAwesomeIcon.Sync.ToIconString());
         }
 
@@ -503,7 +848,8 @@ var popupSize =
      FontAwesomeIcon icon,
      string title,
      Vector4 iconColor,
-     bool showSeeAll = true)
+     bool showSeeAll = true,
+     bool addBottomSpacing = true)
     {
         var origin =
             ImGui.GetCursorScreenPos();
@@ -564,7 +910,8 @@ var popupSize =
 
             var right =
                 ImGui.GetWindowPos().X +
-                ImGui.GetWindowContentRegionMax().X;
+                ImGui.GetWindowContentRegionMax().X -
+                HomeContentRightInset;
 
             var seeAllX =
                 right -
@@ -572,11 +919,37 @@ var popupSize =
                 chevronGap -
                 chevronSize.X;
 
+            var seeAllMin =
+    new Vector2(
+        seeAllX,
+        origin.Y);
+
+            var seeAllMax =
+                new Vector2(
+                    right,
+                    origin.Y + ImGui.GetTextLineHeight() + 6f);
+
+            var seeAllHovered =
+                ImGui.IsMouseHoveringRect(
+                    seeAllMin,
+                    seeAllMax);
+
+            var seeAllColor =
+                seeAllHovered
+                    ? AccentHover
+                    : MutedText;
+
+            if (seeAllHovered)
+            {
+                ImGui.SetMouseCursor(
+                    ImGuiMouseCursor.Hand);
+            }
+
             drawList.AddText(
                 new Vector2(
                     seeAllX,
                     origin.Y + 3f),
-                ImGui.GetColorU32(AccentHover),
+                ImGui.GetColorU32(seeAllColor),
                 seeAll);
 
             using (ImRaii.PushFont(UiBuilder.IconFont))
@@ -587,15 +960,17 @@ var popupSize =
                         seeAllSize.X +
                         chevronGap,
                         origin.Y + 2f),
-                    ImGui.GetColorU32(AccentHover),
+                    ImGui.GetColorU32(seeAllColor),
                     FontAwesomeIcon.ChevronRight.ToIconString());
             }
         }
-
-        ImGui.Dummy(
-            new Vector2(
-                0f,
-                5f));
+        if (addBottomSpacing)
+        {
+            ImGui.Dummy(
+                new Vector2(
+                    0f,
+                    5f));
+        }
     }
 
 
@@ -1093,7 +1468,12 @@ var popupSize =
                 new Vector2(
                     textX,
                     channelY),
-                ImGui.GetColorU32(AccentHover),
+                ImGui.GetColorU32(
+                    new Vector4(
+                        AccentHover.X,
+                        AccentHover.Y,
+                        AccentHover.Z,
+                        0.78f)),
                 userIcon);
         }
 
@@ -1101,19 +1481,29 @@ var popupSize =
             new Vector2(
                 textX + iconWidth + 5f,
                 channelY),
-            ImGui.GetColorU32(MutedText),
+            ImGui.GetColorU32(
+                new Vector4(
+                    MutedText.X,
+                    MutedText.Y,
+                    MutedText.Z,
+                    0.82f)),
             channel);
 
         if (result.ViewCount is { } views)
         {
             drawList.AddText(
-                new Vector2(
-                    textX,
-                    titleBottom +
-                    ImGui.GetTextLineHeight() +
-                    4f),
-                ImGui.GetColorU32(MutedText),
-                FormatViewCount(views));
+               new Vector2(
+                   textX,
+                   titleBottom +
+                   ImGui.GetTextLineHeight() +
+                   4f),
+               ImGui.GetColorU32(
+                   new Vector4(
+                       MutedText.X,
+                       MutedText.Y,
+                       MutedText.Z,
+                       0.58f)),
+               FormatViewCount(views));
         }
 
         // ---------------------------------------------------------
@@ -1422,28 +1812,393 @@ var popupSize =
         return text[..Math.Max(0, maxLength - 1)] + "…";
     }
 
+    private void StartFeaturedTransition(
+     int nextIndex,
+     int direction = 1)
+    {
+        if (featuredTransitioning ||
+            nextIndex == featuredSlideIndex ||
+            nextIndex < 0 ||
+            nextIndex >= FeaturedSlides.Length)
+        {
+            return;
+        }
+
+        featuredNextSlideIndex =
+            nextIndex;
+
+        featuredTransitionDirection =
+            direction >= 0 ? 1 : -1;
+
+        featuredTransitionStartedAt =
+            ImGui.GetTime();
+
+        featuredTransitioning = true;
+    }
+
     private void DrawMediaHubFeatured()
     {
         const float height = 230f;
         const float rounding = 14f;
 
-        var origin = ImGui.GetCursorScreenPos();
-        var width = ImGui.GetContentRegionAvail().X;
-        var size = new Vector2(width, height);
-        var drawList = ImGui.GetWindowDrawList();
+        const double holdDuration = 5.5;
+        const float transitionDuration = 0.85f;
 
+        var origin =
+            ImGui.GetCursorScreenPos();
 
+        var width =
+            ImGui.GetContentRegionAvail().X;
 
-        // Base panel.
+        var size =
+            new Vector2(
+                width,
+                height);
+
+        var drawList =
+            ImGui.GetWindowDrawList();
+
+        var now =
+            ImGui.GetTime();
+
+        // ---------------------------------------------------------
+        // Initialise carousel timing
+        // ---------------------------------------------------------
+
+        if (featuredSlideSettledAt < 0d)
+        {
+            featuredSlideSettledAt = now;
+        }
+
+        // ---------------------------------------------------------
+        // Banner hover
+        // ---------------------------------------------------------
+
+        var mouse =
+            ImGui.GetMousePos();
+
+        var bannerHovered =
+            mouse.X >= origin.X &&
+            mouse.X <= origin.X + width &&
+            mouse.Y >= origin.Y &&
+            mouse.Y <= origin.Y + height;
+
+        // Pause the automatic timer while the user is interacting
+        // with the hero.
+        if (bannerHovered &&
+            !featuredTransitioning)
+        {
+            featuredSlideSettledAt = now;
+        }
+
+        // ---------------------------------------------------------
+        // Automatic rotation
+        // ---------------------------------------------------------
+
+        if (!featuredTransitioning &&
+            !bannerHovered &&
+            now - featuredSlideSettledAt >= holdDuration)
+        {
+            StartFeaturedTransition(
+                (featuredSlideIndex + 1) %
+                FeaturedSlides.Length);
+        }
+
+        // ---------------------------------------------------------
+        // Transition progress
+        // ---------------------------------------------------------
+
+        var transitionProgress = 1f;
+
+        if (featuredTransitioning)
+        {
+            transitionProgress =
+                Math.Clamp(
+                    (float)(
+                        (now - featuredTransitionStartedAt) /
+                        transitionDuration),
+                    0f,
+                    1f);
+
+            if (transitionProgress >= 1f)
+            {
+                featuredSlideIndex =
+                    featuredNextSlideIndex;
+
+                featuredTransitioning = false;
+
+                featuredSlideSettledAt =
+                    now;
+
+                transitionProgress = 1f;
+            }
+        }
+
+        // Smoothstep:
+        // softer start + softer landing than a linear slide.
+        var eased =
+            transitionProgress < 0.5f
+                ? 4f *
+                  transitionProgress *
+                  transitionProgress *
+                  transitionProgress
+                : 1f -
+                  MathF.Pow(
+                      -2f * transitionProgress + 2f,
+                      3f) / 2f;
+
+        // ---------------------------------------------------------
+        // Base panel
+        // ---------------------------------------------------------
+
         drawList.AddRectFilled(
             origin,
             origin + size,
             ImGui.GetColorU32(CardBg),
             rounding);
 
-        // Existing Home artwork becomes the temporary Featured artwork.
+        // Everything belonging to the carousel is clipped
+        // to the hero rectangle while it moves.
+        drawList.PushClipRect(
+            origin,
+            origin + size,
+            true);
+
+        if (featuredTransitioning)
+        {
+            var outgoingOffset =
+                -width *
+                eased *
+                featuredTransitionDirection;
+
+            var incomingOffset =
+                width *
+                (1f - eased) *
+                featuredTransitionDirection;
+
+            DrawFeaturedSlide(
+                FeaturedSlides[featuredSlideIndex],
+                featuredSlideResults[
+                    featuredSlideIndex],
+                origin + new Vector2(
+                    outgoingOffset,
+                    0f),
+                size,
+                rounding,
+                1f - (0.20f * eased),
+                false);
+
+            DrawFeaturedSlide(
+                FeaturedSlides[featuredNextSlideIndex],
+                featuredSlideResults[
+                    featuredNextSlideIndex],
+                origin + new Vector2(
+                    incomingOffset,
+                    0f),
+                size,
+                rounding,
+                0.65f +
+                (0.35f * eased),
+                false);
+        }
+        else
+        {
+            DrawFeaturedSlide(
+                FeaturedSlides[featuredSlideIndex],
+                featuredSlideResults[
+                    featuredSlideIndex],
+                origin,
+                size,
+                rounding,
+                1f,
+                true);
+        }
+
+        drawList.PopClipRect();
+
+        // ---------------------------------------------------------
+        // Border always stays fixed
+        // ---------------------------------------------------------
+
+        drawList.AddRect(
+            origin,
+            origin + size,
+            ImGui.GetColorU32(
+                new Vector4(
+                    Accent.X,
+                    Accent.Y,
+                    Accent.Z,
+                    0.28f)),
+            rounding,
+            ImDrawFlags.None,
+            1f);
+
+        // ---------------------------------------------------------
+        // Carousel indicators
+        // ---------------------------------------------------------
+
+        var dotY =
+            origin.Y +
+            height -
+            20f;
+
+        const float dotGap = 15f;
+        const float dotRadius = 3.5f;
+        const float activePillWidth = 13f;
+
+        var totalIndicatorWidth =
+            activePillWidth +
+            dotGap * 3f;
+
+        var indicatorStartX =
+            origin.X +
+            width -
+            totalIndicatorWidth -
+            16f;
+
+        for (var dot = 0;
+     dot < FeaturedSlides.Length;
+     dot++)
+        {
+            var displayedIndex =
+                featuredTransitioning
+                    ? featuredNextSlideIndex
+                    : featuredSlideIndex;
+
+            var isActive =
+                dot == displayedIndex;
+
+            var x =
+                indicatorStartX +
+                dot * dotGap;
+
+            var dotCenter =
+                new Vector2(
+                    x,
+                    dotY);
+
+            // Slightly generous hit area so the tiny dots
+            // don't feel fiddly to click.
+            var hitMin =
+                dotCenter -
+                new Vector2(7f, 7f);
+
+            var hitMax =
+                dotCenter +
+                new Vector2(7f, 7f);
+
+            var dotHovered =
+                !featuredTransitioning &&
+                mouse.X >= hitMin.X &&
+                mouse.X <= hitMax.X &&
+                mouse.Y >= hitMin.Y &&
+                mouse.Y <= hitMax.Y;
+
+            if (dotHovered)
+            {
+                ImGui.SetMouseCursor(
+                    ImGuiMouseCursor.Hand);
+
+                if (ImGui.IsMouseClicked(
+                        ImGuiMouseButton.Left))
+                {
+                    var direction =
+                        dot > featuredSlideIndex
+                            ? 1
+                            : -1;
+
+                    StartFeaturedTransition(
+                        dot,
+                        direction);
+                }
+            }
+
+            if (isActive)
+            {
+                drawList.AddRectFilled(
+                    new Vector2(
+                        x - activePillWidth * 0.5f,
+                        dotY - 2.5f),
+                    new Vector2(
+                        x + activePillWidth * 0.5f,
+                        dotY + 2.5f),
+                    ImGui.GetColorU32(
+                        AccentHover),
+                    3f);
+            }
+            else
+            {
+                var dotColor =
+                    dotHovered
+                        ? new Vector4(
+                            AccentHover.X,
+                            AccentHover.Y,
+                            AccentHover.Z,
+                            0.78f)
+                        : new Vector4(
+                            MutedText.X,
+                            MutedText.Y,
+                            MutedText.Z,
+                            0.42f);
+
+                drawList.AddCircleFilled(
+                    dotCenter,
+                    dotHovered
+                        ? dotRadius + 0.75f
+                        : dotRadius,
+                    ImGui.GetColorU32(
+                        dotColor));
+            }
+        }
+
+        // Claim the hero's layout space exactly once.
+        ImGui.SetCursorScreenPos(origin);
+
+        ImGui.Dummy(size);
+    }
+
+    private void DrawFeaturedSlide(
+        FeaturedSlide slide,
+        VideoSearchEntry? videoResult,
+        Vector2 origin,
+        Vector2 size,
+        float rounding,
+        float contentAlpha,
+        bool interactive)
+    {
+        var drawList =
+            ImGui.GetWindowDrawList();
+
+        var width =
+            size.X;
+
+        var height =
+            size.Y;
+
+        var videoTitle =
+    videoResult?.Title ??
+    "Loading featured video...";
+
+        var channelName =
+            videoResult?.ChannelName ??
+            "YouTube";
+
+        var thumbnailUrl =
+            videoResult?.ThumbnailUrl ??
+            $"https://i.ytimg.com/vi/{slide.VideoId}/maxresdefault.jpg";
+
+        var viewText =
+            videoResult?.ViewCount is { } views
+                ? FormatViewCount(views)
+                : "Loading...";
+
+        // ---------------------------------------------------------
+        // Background image
+        // ---------------------------------------------------------
+
         var featuredThumbnail =
-     thumbnails.Get(FeaturedVideoThumbnail);
+            thumbnails.Get(
+                thumbnailUrl);
 
         if (featuredThumbnail is not null)
         {
@@ -1482,37 +2237,85 @@ var popupSize =
                 rounding);
         }
 
-        // Dark left-side overlay so Featured copy remains readable.
-        drawList.AddRectFilledMultiColor(
-      origin,
-      origin + size,
-      ImGui.GetColorU32(new Vector4(0.015f, 0.025f, 0.055f, 0.96f)),
-      ImGui.GetColorU32(new Vector4(0.015f, 0.025f, 0.055f, 0.03f)),
-      ImGui.GetColorU32(new Vector4(0.015f, 0.025f, 0.055f, 0.03f)),
-      ImGui.GetColorU32(new Vector4(0.015f, 0.025f, 0.055f, 0.96f)));
+        // ---------------------------------------------------------
+        // Readability gradient
+        // ---------------------------------------------------------
 
-        drawList.AddRect(
+        drawList.AddRectFilledMultiColor(
             origin,
             origin + size,
             ImGui.GetColorU32(
                 new Vector4(
-                    Accent.X,
-                    Accent.Y,
-                    Accent.Z,
-                    0.28f)),
-            rounding,
-            ImDrawFlags.None,
-            1f);
+                    0.015f,
+                    0.025f,
+                    0.055f,
+                    0.96f)),
+            ImGui.GetColorU32(
+                new Vector4(
+                    0.015f,
+                    0.025f,
+                    0.055f,
+                    0.03f)),
+            ImGui.GetColorU32(
+                new Vector4(
+                    0.015f,
+                    0.025f,
+                    0.055f,
+                    0.03f)),
+            ImGui.GetColorU32(
+                new Vector4(
+                    0.015f,
+                    0.025f,
+                    0.055f,
+                    0.96f)));
 
-        var textX = origin.X + 24f;
+        // ---------------------------------------------------------
+        // Small secondary content motion
+        // ---------------------------------------------------------
+
+        var contentOffset =
+            (1f - contentAlpha) * 6f;
+
+        var textX =
+            origin.X +
+            24f +
+            contentOffset;
+
+        uint WithAlpha(
+            Vector4 color,
+            float alpha)
+        {
+            return ImGui.GetColorU32(
+                new Vector4(
+                    color.X,
+                    color.Y,
+                    color.Z,
+                    color.W *
+                    Math.Clamp(
+                        alpha,
+                        0f,
+                        1f)));
+        }
+
+        // ---------------------------------------------------------
+        // Eyebrow
+        // ---------------------------------------------------------
 
         drawList.AddText(
-            new Vector2(textX, origin.Y + 20f),
-            ImGui.GetColorU32(AccentHover),
-            "FEATURED");
+            new Vector2(
+                textX,
+                origin.Y + 20f),
+            WithAlpha(
+                AccentHover,
+                contentAlpha),
+            viewText);
+
+        // ---------------------------------------------------------
+        // Title
+        // ---------------------------------------------------------
 
         var savedCursor =
-    ImGui.GetCursorScreenPos();
+            ImGui.GetCursorScreenPos();
 
         ImGui.SetWindowFontScale(1.35f);
 
@@ -1521,189 +2324,225 @@ var popupSize =
                 textX,
                 origin.Y + 46f));
 
-        ImGui.TextUnformatted(
-            "FINAL FANTASY XIV:");
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.Alpha,
+            contentAlpha))
+        {
+            ImGui.PushTextWrapPos(
+      textX + 430f);
+
+            ImGui.TextWrapped(
+                videoTitle);
+
+            ImGui.PopTextWrapPos();
+        }
+
+        ImGui.SetWindowFontScale(1f);
+
+        // ---------------------------------------------------------
+        // Channel / category
+        // ---------------------------------------------------------
 
         ImGui.SetCursorScreenPos(
             new Vector2(
                 textX,
-                origin.Y + 72f));
+                origin.Y + 112f));
 
-        ImGui.TextUnformatted(
-            "ENDWALKER Full Trailer");
-
-        ImGui.SetWindowFontScale(1f);
-
-        ImGui.SetCursorScreenPos(
-     new Vector2(
-         textX,
-         origin.Y + 112f));
-
-        using (ImRaii.PushFont(UiBuilder.IconFont))
+        using (ImRaii.PushStyle(
+            ImGuiStyleVar.Alpha,
+            contentAlpha))
         {
+            using (ImRaii.PushFont(
+                UiBuilder.IconFont))
+            {
+                ImGui.TextColored(
+                    AccentHover,
+                    FontAwesomeIcon.PlayCircle
+                        .ToIconString());
+            }
+
+            ImGui.SameLine(0f, 7f);
+
             ImGui.TextColored(
-                AccentHover,
-                FontAwesomeIcon.PlayCircle.ToIconString());
+          Vector4.One,
+          channelName);
         }
-
-        ImGui.SameLine(0f, 7f);
-
-        ImGui.TextColored(
-            Vector4.One,
-            "FINAL FANTASY XIV");
-
-        ImGui.SameLine(0f, 7f);
-
-        ImGui.TextColored(
-            MutedText,
-            "•");
-
-        ImGui.SameLine(0f, 7f);
-
-        ImGui.TextColored(
-            MutedText,
-            "Official Trailer");
-
-        ImGui.SetCursorScreenPos(savedCursor);
-
-        // Claim the layout space.
-        ImGui.Dummy(size);
-
-        // Temporary buttons drawn over the lower-left of the hero.
-        var buttonY =
-    origin.Y + height - 48f;
 
         ImGui.SetCursorScreenPos(
-            new Vector2(textX, buttonY));
+            savedCursor);
 
-        if (ImGui.Button(
-            "##featuredWatch",
-            new Vector2(118f, 36f)))
-        {
-            queue.PlayNow(
-                new VideoQueueEntry(
-                    FeaturedVideoUrl,
-                    FeaturedVideoTitle,
-                    FeaturedVideoChannel,
-                    null,
-                    FeaturedVideoThumbnail));
+        // ---------------------------------------------------------
+        // Buttons
+        // ---------------------------------------------------------
 
-            video.Pause(false);
-        }
+        var buttonY =
+            origin.Y +
+            height -
+            48f;
 
-        var watchButtonMin =
-            ImGui.GetItemRectMin();
-
-        var watchButtonSize =
-            ImGui.GetItemRectSize();
-
-        using (ImRaii.PushFont(UiBuilder.IconFont))
-        {
-            var icon =
-                FontAwesomeIcon.Play.ToIconString();
-
-            var iconSize =
-                ImGui.CalcTextSize(icon);
-
-            ImGui.GetWindowDrawList().AddText(
-                new Vector2(
-                    watchButtonMin.X + 15f,
-                    watchButtonMin.Y +
-                    (watchButtonSize.Y - iconSize.Y) * 0.5f),
-                ImGui.GetColorU32(Vector4.One),
-                icon);
-        }
-
-        ImGui.GetWindowDrawList().AddText(
+        var watchMin =
             new Vector2(
-                watchButtonMin.X + 38f,
-                watchButtonMin.Y + 9f),
-            ImGui.GetColorU32(Vector4.One),
+                textX,
+                buttonY);
+
+        var watchMax =
+            watchMin +
+            new Vector2(
+                118f,
+                36f);
+
+        var togetherMin =
+            new Vector2(
+                watchMax.X + 8f,
+                buttonY);
+
+        var togetherMax =
+            togetherMin +
+            new Vector2(
+                142f,
+                36f);
+
+        var mouse =
+            ImGui.GetMousePos();
+
+        var watchHovered =
+            interactive &&
+            mouse.X >= watchMin.X &&
+            mouse.X <= watchMax.X &&
+            mouse.Y >= watchMin.Y &&
+            mouse.Y <= watchMax.Y;
+
+        var togetherHovered =
+            interactive &&
+            mouse.X >= togetherMin.X &&
+            mouse.X <= togetherMax.X &&
+            mouse.Y >= togetherMin.Y &&
+            mouse.Y <= togetherMax.Y;
+
+        drawList.AddRectFilled(
+            watchMin,
+            watchMax,
+            WithAlpha(
+                watchHovered
+                    ? AccentHover
+                    : Accent,
+                contentAlpha),
+            8f);
+
+        drawList.AddRectFilled(
+            togetherMin,
+            togetherMax,
+            WithAlpha(
+                togetherHovered
+                    ? CardBgHover
+                    : new Vector4(
+                        CardBgHover.X,
+                        CardBgHover.Y,
+                        CardBgHover.Z,
+                        0.92f),
+                contentAlpha),
+            8f);
+
+        // ---------------------------------------------------------
+        // Watch Now label
+        // ---------------------------------------------------------
+
+        using (ImRaii.PushFont(
+            UiBuilder.IconFont))
+        {
+            drawList.AddText(
+                watchMin +
+                new Vector2(
+                    15f,
+                    10f),
+                WithAlpha(
+                    Vector4.One,
+                    contentAlpha),
+                FontAwesomeIcon.Play
+                    .ToIconString());
+        }
+
+        drawList.AddText(
+            watchMin +
+            new Vector2(
+                38f,
+                9f),
+            WithAlpha(
+                Vector4.One,
+                contentAlpha),
             "Watch Now");
 
-        ImGui.SameLine(0f, 8f);
+        // ---------------------------------------------------------
+        // Watch Together label
+        // ---------------------------------------------------------
 
-        using (ImRaii.PushColor(
-            ImGuiCol.Button,
-            new Vector4(
-                CardBgHover.X,
-                CardBgHover.Y,
-                CardBgHover.Z,
-                0.92f)))
+        using (ImRaii.PushFont(
+            UiBuilder.IconFont))
         {
-            if (ImGui.Button(
-         "##featuredTogether",
-         new Vector2(142f, 36f)))
-            {
-                currentPage = HomePage.Player;
-            }
-
-            var togetherButtonMin =
-                ImGui.GetItemRectMin();
-
-            var togetherButtonSize =
-                ImGui.GetItemRectSize();
-
-            using (ImRaii.PushFont(UiBuilder.IconFont))
-            {
-                var icon =
-                    FontAwesomeIcon.UserFriends.ToIconString();
-
-                var iconSize =
-                    ImGui.CalcTextSize(icon);
-
-                ImGui.GetWindowDrawList().AddText(
-                    new Vector2(
-                        togetherButtonMin.X + 14f,
-                        togetherButtonMin.Y +
-                        (togetherButtonSize.Y - iconSize.Y) * 0.5f),
-                    ImGui.GetColorU32(Vector4.One),
-                    icon);
-            }
-
-            ImGui.GetWindowDrawList().AddText(
+            drawList.AddText(
+                togetherMin +
                 new Vector2(
-                    togetherButtonMin.X + 38f,
-                    togetherButtonMin.Y + 9f),
-                ImGui.GetColorU32(Vector4.One),
-                "Watch Together");
+                    14f,
+                    10f),
+                WithAlpha(
+                    Vector4.One,
+                    contentAlpha),
+                FontAwesomeIcon.UserFriends
+                    .ToIconString());
         }
 
-        // Featured carousel indicators.
-        // Visual-only for now until Featured supports multiple items.
-        var dotY =
-            origin.Y + height - 20f;
-
-        var dotStartX =
-            origin.X + width - 58f;
-
-        const float dotRadius = 3.5f;
-        const float dotGap = 13f;
-
-        for (var dot = 0; dot < 4; dot++)
-        {
-            var dotColor =
-                dot == 0
-                    ? AccentHover
-                    : new Vector4(
-                        MutedText.X,
-                        MutedText.Y,
-                        MutedText.Z,
-                        0.45f);
-
-            drawList.AddCircleFilled(
-                new Vector2(
-                    dotStartX + dot * dotGap,
-                    dotY),
-                dotRadius,
-                ImGui.GetColorU32(dotColor));
-        }
-
-        // Restore cursor below the hero because the buttons were positioned manually.
-        ImGui.SetCursorScreenPos(
+        drawList.AddText(
+            togetherMin +
             new Vector2(
-                origin.X,
-                origin.Y + height));
+                38f,
+                9f),
+            WithAlpha(
+                Vector4.One,
+                contentAlpha),
+            "Watch Together");
+
+        // ---------------------------------------------------------
+        // Interaction only on settled slide
+        // ---------------------------------------------------------
+
+        if (!interactive)
+        {
+            return;
+        }
+
+        if (watchHovered ||
+            togetherHovered)
+        {
+            ImGui.SetMouseCursor(
+                ImGuiMouseCursor.Hand);
+        }
+
+        if (!ImGui.IsMouseClicked(
+         ImGuiMouseButton.Left))
+        {
+            return;
+        }
+
+        if (!watchHovered &&
+            !togetherHovered)
+        {
+            return;
+        }
+
+        if (videoResult is null)
+        {
+            return;
+        }
+
+        queue.PlayNow(
+            new VideoQueueEntry(
+                videoResult.Url,
+                videoResult.Title,
+                videoResult.ChannelName,
+                videoResult.Duration,
+                videoResult.ThumbnailUrl));
+
+        video.Pause(false);
     }
 
     private void DrawMediaHubShelf(
@@ -1735,7 +2574,7 @@ var popupSize =
             AccentHover,
             seeAll);
 
-        ImGui.Dummy(new Vector2(0f, 2f));
+        ImGui.Dummy(new Vector2(0f, 5f));
 
         // ---------------------------------------------------------
         // Placeholder cards
@@ -1848,7 +2687,6 @@ var popupSize =
     private void DrawFfxivYouTubeShelf()
     {
         const string title = "FFXIV on YouTube";
-        const string hideText = "Hide";
 
         const int columns = 5;
         const float gap = 10f;
@@ -1863,61 +2701,94 @@ var popupSize =
         // ---------------------------------------------------------
 
         DrawHomeShelfHeading(
-    FontAwesomeIcon.PlayCircle,
-    title,
-    AccentHover,
-    false);
-
-        var hideWidth =
-            ImGui.CalcTextSize(hideText).X;
+            FontAwesomeIcon.PlayCircle,
+            title,
+            AccentHover,
+            false,
+            false);
 
         ImGui.SameLine();
-
-        ImGui.SetCursorPosX(
-            ImGui.GetWindowContentRegionMax().X -
-            hideWidth);
-
-
 
         ImGui.PushID("ffxivYoutubeHide");
 
         ImGui.SetCursorPosX(
             ImGui.GetWindowContentRegionMax().X -
+            HomeContentRightInset -
             ImGui.CalcTextSize("Hide this section").X -
             30f);
+
+        var hideStart =
+            ImGui.GetCursorScreenPos();
+
+        Vector2 hideIconSize;
+
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            hideIconSize =
+                ImGui.CalcTextSize(
+                    FontAwesomeIcon.Eye.ToIconString());
+        }
+
+        var hideTextSize =
+            ImGui.CalcTextSize(
+                "Hide this section");
+
+        var hideTotalWidth =
+            hideIconSize.X +
+            6f +
+            hideTextSize.X;
+
+        var hideMin =
+            hideStart;
+
+        var hideMax =
+            hideStart +
+            new Vector2(
+                hideTotalWidth,
+                MathF.Max(
+                    hideIconSize.Y,
+                    hideTextSize.Y) + 4f);
+
+        var hideHovered =
+            ImGui.IsMouseHoveringRect(
+                hideMin,
+                hideMax);
+
+        var hideColor =
+            hideHovered
+                ? AccentHover
+                : MutedText;
 
         using (ImRaii.PushFont(UiBuilder.IconFont))
         {
             ImGui.TextColored(
-                MutedText,
+                hideColor,
                 FontAwesomeIcon.Eye.ToIconString());
         }
 
         ImGui.SameLine(0f, 6f);
 
         ImGui.TextColored(
-            MutedText,
+            hideColor,
             "Hide this section");
-
-        var hideHovered =
-            ImGui.IsItemHovered();
 
         if (hideHovered)
         {
             ImGui.SetMouseCursor(
                 ImGuiMouseCursor.Hand);
-        }
 
-        if (ImGui.IsItemClicked())
-        {
-            Plugin.Cfg.ShowFfxivYouTubeSection = false;
-            Plugin.Cfg.Save();
+            if (ImGui.IsMouseClicked(
+                ImGuiMouseButton.Left))
+            {
+                Plugin.Cfg.ShowFfxivYouTubeSection = false;
+                Plugin.Cfg.Save();
+            }
         }
 
         ImGui.PopID();
 
         ImGui.Dummy(
-     new Vector2(0f, 10f));
+            new Vector2(0f, 5f));
 
         // ---------------------------------------------------------
         // Results
@@ -2928,9 +3799,6 @@ ImGui.GetColorU32(
         var hovered =
             ImGui.IsItemHovered();
 
-        var clicked =
-            ImGui.IsItemClicked();
-
         drawList.AddRectFilled(
             origin,
             origin + size,
@@ -2995,7 +3863,7 @@ ImGui.GetColorU32(
         }
 
         const string title =
-            "Create New Party";
+            "Watch With Friends";
 
         var titleSize =
             ImGui.CalcTextSize(title);
@@ -3008,10 +3876,12 @@ ImGui.GetColorU32(
             title);
 
         const string subtitle1 =
-            "Host a room and watch";
+            "Create or join a room to";
 
         const string subtitle2 =
-            "together with friends";
+            "watch videos together in Eorzea";
+
+
 
         var subtitle1Size =
             ImGui.CalcTextSize(subtitle1);
@@ -3035,17 +3905,137 @@ ImGui.GetColorU32(
             ImGui.GetColorU32(MutedText),
             subtitle2);
 
+        // ---------------------------------------------------------
+        // Placeholder actions
+        // ---------------------------------------------------------
+
+        const float buttonGap = 8f;
+        const float buttonHeight = 28f;
+        const float horizontalPadding = 12f;
+
+        var buttonWidth =
+            (width - horizontalPadding * 2f - buttonGap) * 0.5f;
+
+        var buttonsY =
+            origin.Y + height - buttonHeight - 10f;
+
+        var newRoomMin =
+            new Vector2(
+                origin.X + horizontalPadding,
+                buttonsY);
+
+        var newRoomMax =
+            new Vector2(
+                newRoomMin.X + buttonWidth,
+                buttonsY + buttonHeight);
+
+        var joinRoomMin =
+            new Vector2(
+                newRoomMax.X + buttonGap,
+                buttonsY);
+
+        var joinRoomMax =
+            new Vector2(
+                joinRoomMin.X + buttonWidth,
+                buttonsY + buttonHeight);
+
+
+        // ---------------------------------------------------------
+        // New Room button
+        // ---------------------------------------------------------
+
+        var mousePos =
+            ImGui.GetMousePos();
+
+        var newRoomHovered =
+            mousePos.X >= newRoomMin.X &&
+            mousePos.X <= newRoomMax.X &&
+            mousePos.Y >= newRoomMin.Y &&
+            mousePos.Y <= newRoomMax.Y;
+
+        drawList.AddRectFilled(
+            newRoomMin,
+            newRoomMax,
+            ImGui.GetColorU32(
+                newRoomHovered
+                    ? AccentHover
+                    : Accent),
+            6f);
+
+        const string newRoomText = "New Room";
+
+        var newRoomTextSize =
+            ImGui.CalcTextSize(newRoomText);
+
+        drawList.AddText(
+            new Vector2(
+                newRoomMin.X +
+                    (buttonWidth - newRoomTextSize.X) * 0.5f,
+                newRoomMin.Y +
+                    (buttonHeight - newRoomTextSize.Y) * 0.5f),
+            ImGui.GetColorU32(Vector4.One),
+            newRoomText);
+
+
+        // ---------------------------------------------------------
+        // Join Room button
+        // ---------------------------------------------------------
+
+        var joinRoomHovered =
+            mousePos.X >= joinRoomMin.X &&
+            mousePos.X <= joinRoomMax.X &&
+            mousePos.Y >= joinRoomMin.Y &&
+            mousePos.Y <= joinRoomMax.Y;
+
+        drawList.AddRectFilled(
+            joinRoomMin,
+            joinRoomMax,
+            ImGui.GetColorU32(
+                joinRoomHovered
+                    ? CardBgHover
+                    : CardBg),
+            6f);
+
+        drawList.AddRect(
+            joinRoomMin,
+            joinRoomMax,
+            ImGui.GetColorU32(
+                new Vector4(
+                    Accent.X,
+                    Accent.Y,
+                    Accent.Z,
+                    joinRoomHovered ? 0.9f : 0.55f)),
+            6f);
+
+        const string joinRoomText = "Join Room";
+
+        var joinRoomTextSize =
+            ImGui.CalcTextSize(joinRoomText);
+
+        drawList.AddText(
+            new Vector2(
+                joinRoomMin.X +
+                    (buttonWidth - joinRoomTextSize.X) * 0.5f,
+                joinRoomMin.Y +
+                    (buttonHeight - joinRoomTextSize.Y) * 0.5f),
+            ImGui.GetColorU32(
+                joinRoomHovered
+                    ? Vector4.One
+                    : MutedText),
+            joinRoomText);
+
+        if (newRoomHovered || joinRoomHovered)
+        {
+            ImGui.SetMouseCursor(
+                ImGuiMouseCursor.Hand);
+        }
+
         if (hovered)
         {
             ImGui.SetMouseCursor(
                 ImGuiMouseCursor.Hand);
         }
 
-        if (clicked)
-        {
-            currentPage =
-                HomePage.WatchAlong;
-        }
     }
 
     private static string FormatViewCount(

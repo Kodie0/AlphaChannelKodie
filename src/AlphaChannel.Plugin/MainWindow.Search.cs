@@ -1015,6 +1015,46 @@ internal sealed partial class MainWindow
         return viewScore + ageBonus;
     }
 
+    private async Task LoadFeaturedSlidesAsync()
+    {
+        try
+        {
+            var tasks =
+                FeaturedSlides
+                    .Select(
+                        slide =>
+                            searchResolver.GetVideoEntryAsync(
+                                slide.Url,
+                                CancellationToken.None))
+                    .ToArray();
+
+            var results =
+                await Task.WhenAll(tasks)
+                    .ConfigureAwait(false);
+
+            var loaded =
+                new VideoSearchEntry?[
+                    FeaturedSlides.Length];
+
+            for (var i = 0;
+                 i < results.Length;
+                 i++)
+            {
+                loaded[i] =
+                    results[i];
+            }
+
+            featuredSlideResults =
+                loaded;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning(
+                $"[Home] Failed to load featured videos: " +
+                $"{exception.Message}");
+        }
+    }
+
     private async Task LoadHomeYouTubeAsync(bool forceRefresh = false)
     {
         try

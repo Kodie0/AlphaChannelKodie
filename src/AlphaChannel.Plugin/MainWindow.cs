@@ -98,7 +98,7 @@ internal sealed partial class MainWindow : Window, IDisposable
     // saves, same split as requestRename above (MainWindow owns the UI, Plugin.cs owns persistence).
     private readonly Action<CharacterSession?> onSessionChanged;
     // Wide media-hub layout: left navigation + spacious content + social rail + compact player bar.
-    private static readonly Vector2 WindowSize = new(1400, 840);
+    private static readonly Vector2 WindowSize = new(1150, 840);
     private static readonly Vector2 MiniModeSize = new(260, 840);
     // Compact capsule chrome while tucked away - wide enough for brand + expand + close.
     private static readonly Vector2 MinimizedSize = new(276, 40);
@@ -118,17 +118,22 @@ internal sealed partial class MainWindow : Window, IDisposable
     private int pendingFrames;
 
     private HomePage currentPage = HomePage.Home;
+
+    // Transition Animation
+    private HomePage lastAnimatedPage = HomePage.Home;
+    private double pageTransitionStartedAt = -1d;
+
     private string joinHostNameInput = string.Empty;
     private string? joinError;
 
     private const float SidebarWidth = 185f;
     private const float RightRailWidth = 300f;
-    private const float BottomBarHeight = 78f;
+    private const float BottomBarHeight = 96f;
 
     // Borderless Child windows ignore WindowPadding in this ImGui build unless AlwaysUseWindowPadding
-    // is set. NoScrollbar keeps chrome panes clean (navbar / cards / rails).
-    private const ImGuiWindowFlags PaddedChild = ImGuiWindowFlags.AlwaysUseWindowPadding
-        | ImGuiWindowFlags.NoScrollbar;
+    private const ImGuiWindowFlags PaddedChild =
+    ImGuiWindowFlags.AlwaysUseWindowPadding |
+    ImGuiWindowFlags.NoScrollbar;
 
     private const ImGuiWindowFlags NavPaneFlags = PaddedChild | ImGuiWindowFlags.NoScrollWithMouse;
 
@@ -141,6 +146,9 @@ internal sealed partial class MainWindow : Window, IDisposable
     private bool namePromptActive;
     private string namePromptInput = string.Empty;
     private Action<string>? onNameConfirmed;
+
+    //Scrollbar inactivity timer
+    private double lastScrollInteractionTime;
 
     internal bool IsNamePromptActive => namePromptActive;
 
@@ -306,6 +314,12 @@ internal sealed partial class MainWindow : Window, IDisposable
         joinedHostDisplayName = null;
         _ = stream.LeaveAsync();
     }
+    private void StopPlayback()
+    {
+        video.Stop();
+        queue.Clear();
+    }
+
 
     internal string? JoinedHostDisplayName => joinedHostDisplayName;
     internal bool ProximityJoined => proximityJoined;
@@ -427,6 +441,15 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    private void OpenPlayerSearch(int tab, string value)
+    {
+        currentPage = HomePage.Player;
+        activePlayerDrawer = PlayerDrawer.PlayVideo;
+
+        playerSourceTab = tab;
+        pendingPlayerSearch = value;
+    }
+
     private void EnsureAlphaIconLoaded()
     {
         if (alphaIconImage is not null)
@@ -445,7 +468,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         }
     }
 
-    private static void HandleHomeDragScroll()
+    private void HandleHomeDragScroll()
     {
         // Mouse wheel scrolling is handled natively by ImGui.
         // This adds click-and-drag scrolling when dragging empty Home background.
@@ -480,6 +503,8 @@ internal sealed partial class MainWindow : Window, IDisposable
                 ImGui.GetScrollY() - delta,
                 0f,
                 ImGui.GetScrollMaxY()));
+
+        lastScrollInteractionTime = ImGui.GetTime();
     }
 
     public override void Draw()
@@ -489,6 +514,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         customBackgroundActive = Plugin.Cfg.UiBackground == UiBackground.Custom && customBackground is not null;
         using var theme = new ThemeScope();
         CaptureCurrentPosition();
+
 
         if (windowMinimized)
         {
@@ -505,21 +531,67 @@ internal sealed partial class MainWindow : Window, IDisposable
         DrawNamePrompt();
         DrawSignInModal();
         DrawProfilePopup();
-        DrawGlowBorder();
+        // DrawGlowBorder();
 
         var avail = ImGui.GetContentRegionAvail();
-        var topHeight = MathF.Max(avail.Y - BottomBarHeight, 120f);
 
         var playbackActive = queue.Current is not null;
 
-        var showRightRail = true;
-        var rightWidth = RightRailWidth;
+        if (playbackActive && !playbackWasActive)
+        {
+            playbackStartedAt = ImGui.GetTime();
+        }
+
+        if (!playbackActive && playbackWasActive)
+        {
+            playbackStoppedAt = ImGui.GetTime();
+        }
+
+        playbackWasActive = playbackActive;
+
+        if (playbackActive && !lastPlaybackState)
+        {
+            playbackStartedAt = ImGui.GetTime();
+        }
+
+        lastPlaybackState = playbackActive;
+
+        var topHeight = MathF.Max(
+            avail.Y,
+            120f);
+
+        var showRightRail = false;
+        var rightWidth = showRightRail ? RightRailWidth : 0f;
         var centerWidth = MathF.Max(avail.X - SidebarWidth - rightWidth, 0f);
 
         if (!miniMode)
         {
+         
+
+            ImGui.SameLine(0, 0);
+
+            // Settings keeps a scrollbar so the long preferences sheet stays usable;
+            // every other page hides chrome scrollbars.
+            var contentFlags = currentPage switch
+            {
+                HomePage.Settings =>
+     PaddedChild,
+
+                HomePage.Home =>
+                    PaddedChild,
+
+                _ =>
+                    PaddedChild,
+            };
+
+            var contentOrigin = ImGui.GetCursorScreenPos();
+
+            using (ImRaii.PushStyle(
+                ImGuiStyleVar.WindowPadding,
+                new Vector2(24, 18)))
+
             using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
-            using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(14, 16)))
+            using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(16, 18)))
             using (var sidebar = ImRaii.Child(
                 "##sidebar",
                 new Vector2(SidebarWidth, topHeight),
@@ -532,36 +604,105 @@ internal sealed partial class MainWindow : Window, IDisposable
                 }
             }
 
+
+
+            // Sidebar right border - subtle theme accent divider
+            var sidebarEdge = ImGui.GetItemRectMax().X;
+            var dividerList = ImGui.GetForegroundDrawList();
+
+            var windowPos = ImGui.GetWindowPos();
+            var windowSize = ImGui.GetWindowSize();
+
+            dividerList.AddLine(
+                new Vector2(sidebarEdge - 1f, windowPos.Y + 6f),
+                new Vector2(sidebarEdge - 1f, windowPos.Y + windowSize.Y - 6f),
+                ImGui.GetColorU32(new Vector4(
+                    Accent.X,
+                    Accent.Y,
+                    Accent.Z,
+                    0.14f)),
+                1f);
+
             ImGui.SameLine(0, 0);
 
-            // Settings keeps a scrollbar so the long preferences sheet stays usable;
-            // every other page hides chrome scrollbars.
-            var contentFlags = currentPage switch
-            {
-                HomePage.Settings =>
-                    ImGuiWindowFlags.AlwaysUseWindowPadding,
 
-                HomePage.Home =>
-                    PaddedChild | ImGuiWindowFlags.NoScrollbar,
-
-                _ =>
-                    PaddedChild | ImGuiWindowFlags.NoScrollWithMouse,
-            };
-
-            var contentOrigin = ImGui.GetCursorScreenPos();
-
-            using (ImRaii.PushStyle(
-                ImGuiStyleVar.WindowPadding,
-                new Vector2(24, 18)))
+            using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(12, 18)))
             using (var content = ImRaii.Child(
-    "##content",
-    new Vector2(centerWidth, topHeight),
-    false,
-    contentFlags))
+                "##content",
+                new Vector2(centerWidth, topHeight),
+                false,
+                contentFlags))
             {
                 if (content)
                 {
-                    DrawContent();
+
+                    // ---------------------------------------------------------
+                    // Page entrance transition
+                    // ---------------------------------------------------------
+
+                    if (currentPage != lastAnimatedPage)
+                    {
+                        lastAnimatedPage = currentPage;
+                        pageTransitionStartedAt = ImGui.GetTime();
+                    }
+
+                    const float pageTransitionDuration = 0.30f;
+                    const float pageTransitionDistance = 18f;
+
+                    float pageTransitionProgress;
+
+                    if (pageTransitionStartedAt < 0d)
+                    {
+                        pageTransitionProgress = 1f;
+                    }
+                    else
+                    {
+                        pageTransitionProgress =
+                            Math.Clamp(
+                                (float)((ImGui.GetTime() - pageTransitionStartedAt) /
+                                        pageTransitionDuration),
+                                0f,
+                                1f);
+                    }
+
+                    // Smooth ease-out rather than a linear movement.
+                    var pageTransitionEased =
+                        1f -
+                        MathF.Pow(
+                            1f - pageTransitionProgress,
+                            3f);
+
+                    var pageTransitionOffset =
+                        pageTransitionDistance *
+                        (1f - pageTransitionEased);
+
+                    var pageTransitionAlpha =
+                        0.15f +
+                        (0.85f * pageTransitionEased);
+
+                    // Start the new page very slightly lower and settle it into place.
+                    if (pageTransitionOffset > 0.01f)
+                    {
+                        ImGui.SetCursorPosY(
+                            ImGui.GetCursorPosY() +
+                            pageTransitionOffset);
+                    }
+
+                    // Fade only the page content.
+                    // The scrollbar and player bar remain unaffected.
+                    using (ImRaii.PushStyle(
+                        ImGuiStyleVar.Alpha,
+                        pageTransitionAlpha))
+                    {
+                        DrawContent();
+                    }
+
+                    DrawCustomContentScrollbar();
+
+                    if (playbackActive)
+                    {
+                        ImGui.Dummy(new Vector2(0, BottomBarHeight));
+                    }
 
                     if (currentPage == HomePage.Home)
                     {
@@ -570,28 +711,7 @@ internal sealed partial class MainWindow : Window, IDisposable
                 }
             }
 
-            var contentMin = contentOrigin;
-            var contentMax = contentOrigin + new Vector2(centerWidth, topHeight);
-
-            var drawList = ImGui.GetForegroundDrawList();
-
-            drawList.AddLine(
-                contentMin,
-                new Vector2(contentMin.X, contentMax.Y),
-                ImGui.GetColorU32(BorderSubtle),
-                1f);
-
-            drawList.AddLine(
-                new Vector2(contentMax.X, contentMin.Y),
-                contentMax,
-                ImGui.GetColorU32(BorderSubtle),
-                1f);
-
-            drawList.AddLine(
-                new Vector2(contentMin.X, contentMax.Y),
-                contentMax,
-                ImGui.GetColorU32(BorderSubtle),
-                1f);
+           
         }
 
         if (showRightRail)
@@ -618,15 +738,21 @@ internal sealed partial class MainWindow : Window, IDisposable
             }
         }
 
-        using (ImRaii.PushColor(ImGuiCol.ChildBg, SidebarBg))
-        using (ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(20, 10)))
-        using (var bottom = ImRaii.Child("##bottomBar", new Vector2(avail.X, BottomBarHeight), false,
-            NavPaneFlags))
+        var showingPlaybackBar =
+      playbackActive ||
+        (ImGui.GetTime() - playbackStoppedAt) < 0.35f;
+
+        if (showingPlaybackBar)
         {
-            if (bottom)
-            {
-                DrawBottomBar();
-            }
+            var windowPos = ImGui.GetWindowPos();
+            var windowSize = ImGui.GetWindowSize();
+
+            ImGui.SetCursorScreenPos(
+                windowPos + new Vector2(
+                    SidebarWidth,
+                    windowSize.Y - BottomBarHeight));
+
+            DrawBottomBar(playbackActive);
         }
 
         // Overlay last — its own ImGui window so clicks aren't eaten by the content/rail children.
@@ -907,7 +1033,7 @@ internal sealed partial class MainWindow : Window, IDisposable
         // but no longer reads as an RGB/neon frame.
         for (var layer = 3; layer >= 1; layer--)
         {
-            var outset = layer * 2f;
+            var outset = 0f;
             var alpha = 0.018f + (4 - layer) * 0.012f;
 
             drawList.AddRect(
@@ -1036,7 +1162,7 @@ ImGui.GetColorU32(Vector4.One));
         const float footerGap = 8f;
         const float bottomSlack = 10f;
         var versionH = ImGui.GetTextLineHeightWithSpacing();
-        var footerH = 190f;
+        var footerH = 300f;
 
         using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, Vector2.Zero))
         {
@@ -1050,56 +1176,30 @@ ImGui.GetColorU32(Vector4.One));
             var panelWidth = ImGui.GetContentRegionAvail().X;
             var footerHeight = 160f;
 
-            ImGui.GetWindowDrawList().AddRect(
-                footerOrigin,
-                footerOrigin + new Vector2(panelWidth, footerHeight),
-                ImGui.GetColorU32(BorderSubtle),
-                12f,
-                ImDrawFlags.None,
-                1f);
+           
 
             ImGui.Dummy(new Vector2(0, 8));
 
-            var usersText = $"{usersOnlineCount} users online";
-            var usersTextWidth = ImGui.CalcTextSize(usersText).X;
-            var dotWidth = ImGui.GetFontSize();
 
-            var totalWidth = dotWidth + 6 + usersTextWidth;
-
-            ImGui.SetCursorPosX(
-                ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - totalWidth) * 0.5f);
-
-            ImGui.TextColored(Good, "●");
-            ImGui.SameLine(0, 6);
-            ImGui.TextUnformatted(usersText);
-
-            ImGui.Dummy(new Vector2(0, 6));
-
-            var friendsOnline = friends.Count(f => f.Online);
-            var friendsText = $"{friendsOnline} friends online";
-            var friendsWidth = ImGui.CalcTextSize(friendsText).X;
-
-            ImGui.SetCursorPosX(
-                ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - friendsWidth) * 0.5f);
-
-            ImGui.TextColored(MutedText, friendsText);
-
-            ImGui.Dummy(new Vector2(0, 8));
-
-            DrawVersionFooter();
-
-            ImGui.Dummy(new Vector2(0, 8));
 
             DrawSupportLink(
-    "♥  Join on Patreon",
-    32f,
-    PatreonOrange,
-    PatreonOrangeHover,
-    "https://www.patreon.com/alphachannel");
+     "♥  Join on Patreon",
+     32f,
+     PatreonOrange,
+     PatreonOrangeHover,
+     "https://www.patreon.com/alphachannel");
 
             ImGui.Dummy(new Vector2(0, 6));
 
             DrawDonateLink("♥  Donate on Ko-fi", 32f);
+
+            ImGui.Dummy(new Vector2(0, 105));
+
+            DrawSidebarProfile();
+
+            ImGui.Dummy(new Vector2(0, 35));
+
+            DrawVersionFooter();
         }
     }
 
@@ -1158,6 +1258,75 @@ ImGui.GetColorU32(Vector4.One));
                 conversationsDirty = true;
             }
         }
+    }
+
+    private void DrawCustomContentScrollbar()
+    {
+        var windowPos = ImGui.GetWindowPos();
+        var windowSize = ImGui.GetWindowSize();
+
+        var scrollY = ImGui.GetScrollY();
+        var maxScroll = ImGui.GetScrollMaxY();
+
+        var scrollingRecently =
+    ImGui.GetTime() - lastScrollInteractionTime < 1.2f;
+
+        var scrollbarAlpha = scrollingRecently ? 0.85f : 0.28f;
+
+        if (maxScroll <= 0f)
+            return;
+
+        var scrollbarX = windowPos.X + windowSize.X - 7f;
+        var scrollbarTop = windowPos.Y + 8f;
+        var scrollbarBottomClearance = BottomBarHeight + 12f;
+        var scrollbarHeight = windowSize.Y - scrollbarBottomClearance - 16f;
+
+        var thumbHeight =
+            MathF.Max(
+                40f,
+                scrollbarHeight * (windowSize.Y / (windowSize.Y + maxScroll)));
+
+        var scrollPercent = scrollY / maxScroll;
+
+        var thumbY =
+            scrollbarTop +
+            (scrollbarHeight - thumbHeight) * scrollPercent;
+
+        var drawList = ImGui.GetWindowDrawList();
+
+        drawList.AddRectFilled(
+            new Vector2(scrollbarX, scrollbarTop),
+            new Vector2(scrollbarX + 4f, scrollbarTop + scrollbarHeight),
+            ImGui.GetColorU32(new Vector4(
+    Accent.X,
+    Accent.Y,
+    Accent.Z,
+    0.10f)),
+            3f);
+
+        drawList.AddRect(
+    new Vector2(scrollbarX - 1f, thumbY - 1f),
+    new Vector2(scrollbarX + 7f, thumbY + thumbHeight + 1f),
+    ImGui.GetColorU32(
+        new Vector4(
+            Accent.X,
+            Accent.Y,
+            Accent.Z,
+            0.25f)),
+    4f,
+    ImDrawFlags.None,
+    1f);
+
+        drawList.AddRectFilled(
+            new Vector2(scrollbarX, thumbY),
+            new Vector2(scrollbarX + 6f, thumbY + thumbHeight),
+            ImGui.GetColorU32(
+    new Vector4(
+        Accent.X,
+        Accent.Y,
+        Accent.Z,
+        scrollbarAlpha)),
+            3f);
     }
 
     private void DrawWatchingStat()
@@ -1256,6 +1425,51 @@ ImGui.GetColorU32(Vector4.One));
             label);
     }
 
+    private void DrawSidebarProfile()
+    {
+        var origin = ImGui.GetCursorScreenPos();
+
+        var session = CurrentSession;
+
+        DrawAvatarChip(
+            session?.AvatarIcon,
+            session?.AvatarColorHex,
+            42,
+            session?.AvatarImageUrl);
+
+        ImGui.SetCursorScreenPos(
+            origin + new Vector2(55, 8));
+
+        if (!string.IsNullOrEmpty(CurrentCharacterName))
+        {
+            ImGui.TextUnformatted(CurrentCharacterName);
+        }
+        else
+        {
+            ImGui.TextUnformatted("Unknown");
+        }
+
+        ImGui.SetCursorScreenPos(
+            origin + new Vector2(55, 28));
+
+        ImGui.TextColored(
+    Good,
+    "● Online");
+
+        ImGui.SetCursorScreenPos(
+            origin + new Vector2(55, 48));
+
+        var friendsOnline = friends.Count(f => f.Online);
+
+        ImGui.SetWindowFontScale(0.9f);
+
+        ImGui.TextColored(
+            MutedText,
+            $"{friendsOnline} friends online");
+
+        ImGui.SetWindowFontScale(1f);
+    }
+
     private void DrawDonateLink(string label, float height)
     {
         var width = ImGui.GetContentRegionAvail().X - 24f;
@@ -1308,7 +1522,9 @@ ImGui.GetColorU32(Vector4.One));
         var textWidth = ImGui.CalcTextSize(text).X;
         var avail = ImGui.GetContentRegionAvail().X;
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + MathF.Max(0f, (avail - textWidth) * 0.5f));
+        ImGui.SetWindowFontScale(0.75f);
         ImGui.TextColored(MutedText, text);
+        ImGui.SetWindowFontScale(1f);
     }
 
     // Every non-Home page starts with back + title + a one-line purpose so each Channel reads as
@@ -1783,7 +1999,7 @@ ImGui.GetColorU32(Vector4.One));
             ImGui.PushStyleColor(ImGuiCol.ButtonActive, AccentActive);
             ImGui.PushStyleColor(ImGuiCol.FrameBg, FrameBg);
             ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, FrameBgHover);
-            ImGui.PushStyleColor(ImGuiCol.SliderGrab, Accent);
+            ImGui.PushStyleColor(ImGuiCol.SliderGrab, Accent); var footerH = 190f;
             ImGui.PushStyleColor(ImGuiCol.SliderGrabActive, AccentActive);
             ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 12f);
             ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, 12f);

@@ -71,6 +71,7 @@ internal sealed class VideoEngine : IDisposable
     private static bool IsYTURL(string url) => YtRegex.IsMatch(url);
 
     private bool _isActive; // whether the screen should currently be drawing for the local player
+    private volatile bool _stopRequested;
     private bool _lastIdle = true;
     private int _pendingVolume = 60;
 
@@ -116,28 +117,48 @@ internal sealed class VideoEngine : IDisposable
 
     internal void StopVideo()
     {
+        _stopRequested = true;
+
         _isActive = false;
         _rendererFailed = false;
 
+        _mpvRenderer?.Stop();
+
         var renderer = _mpvRenderer;
         _mpvRenderer = null;
-
-        _screenPainter.SetLoading(false);
-        _screenPainter.SetTarget(null);
 
         if (renderer is not null)
         {
             try
             {
-                renderer.Dispose();
+                Task.Delay(1000).ContinueWith(_ =>
+                {
+                    try
+                    {
+                        if (ReferenceEquals(_mpvRenderer, renderer))
+                        {
+                            _mpvRenderer = null;
+                        }
+
+                        renderer.Dispose();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Already cleaned up by the render loop.
+                    }
+                    catch (Exception exception)
+                    {
+                        AepLog.Warning(
+                            $"[MPV] Failed delayed renderer dispose after video end: {exception.Message}");
+                    }
+                });
             }
             catch (Exception exception)
             {
                 AepLog.Warning(
-                    $"[MPV] Failed to dispose renderer cleanly: {exception.Message}");
+                    $"[MPV] Failed to schedule renderer cleanup: {exception.Message}");
             }
         }
-
         // MpvRenderer.Dispose() cancels the token it was given.
         // Every fresh renderer therefore needs a fresh token source.
         _renderCancellation.Dispose();
@@ -193,6 +214,7 @@ internal sealed class VideoEngine : IDisposable
         }
 
         LastError = null;
+        _stopRequested = false;
 
         AssignScreenForSession(_screenTexture);
 
@@ -216,8 +238,7 @@ internal sealed class VideoEngine : IDisposable
             {
                 if (_mpvRenderer != null)
                 {
-                    _mpvRenderer.OnFrameRendered =
-                        () => _screenPainter.SetLoading(false);
+
 
                     _mpvRenderer.Play(
                         url,
@@ -250,9 +271,10 @@ internal sealed class VideoEngine : IDisposable
          AepLog.Warning(
              $"[MPV] Playback failed; renderer marked for reset: {message}");
      };
-
                 _mpvRenderer.OnFrameRendered =
-                    () => _screenPainter.SetLoading(false);
+    () => _screenPainter.SetLoading(false);
+
+
 
                 _mpvRenderer.Initialize(
                     ScreenWidth,
@@ -277,20 +299,44 @@ internal sealed class VideoEngine : IDisposable
                     ScreenPosition,
                     ScreenYaw,
                     ScreenScale);
-                while (true)
+                while (!_stopRequested && _mpvRenderer.RenderFrame())
                 {
-                    if (!_mpvRenderer.RenderFrame())
+                }
+
+                AepLog.Debug("[MPV] Video ended, cleaning up renderer");
+
+                _isActive = false;
+
+                _screenPainter.SetLoading(false);
+                _screenPainter.SetTarget(null);
+
+                var renderer = _mpvRenderer;
+                _mpvRenderer = null;
+
+                if (renderer is not null)
+                {
+                    try
                     {
-                        break;
+                        renderer.Dispose();
+                    }
+                    catch (Exception exception)
+                    {
+                        AepLog.Warning(
+                            $"[MPV] Failed to dispose renderer after video end: {exception.Message}");
                     }
                 }
 
-                AepLog.Debug("Stopping Video Player");
+                _renderCancellation.Dispose();
+                _renderCancellation = new CancellationTokenSource();
             }
             catch (Exception e)
             {
                 AepLog.Error($"[MPV] Generic error: {e.Message} {e.StackTrace}");
                 LastError = e.Message;
+
+                _isActive = false;
+                _screenPainter.SetLoading(false);
+                _screenPainter.SetTarget(null);
             }
         });
     }

@@ -183,7 +183,7 @@ float4 LoadingPS(VOut i, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     // video shader instead of mirroring the loading artwork.
     if (!isFrontFace)
     {
-        return float4(0.333, 0.333, 0.333, 1.0);
+        return float4(0.015, 0.015, 0.02, 1.0); // subtle black plastic back
     }
 
 
@@ -271,7 +271,7 @@ float4 LoadingPS(VOut i, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 
 				if (!isFrontFace)
 				{
-					return float4(0.333, 0.333, 0.333, 1); //#555555 - back of the screen, not the (mirrored) video
+					return float4(0.015, 0.015, 0.02, 1.0); // subtle black plastic back
 				}
 				return tex.Sample(smp, i.uv);
 			}

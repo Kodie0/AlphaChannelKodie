@@ -87,7 +87,7 @@ internal sealed partial class MainWindow
             ImGui.SameLine();
             if (IconButton(FontAwesomeIcon.PowerOff))
             {
-                queue.Clear();
+                StopPlayback();
             }
         });
 
@@ -304,7 +304,7 @@ internal sealed partial class MainWindow
         }
 
         if (ImGui.IsItemDeactivatedAfterEdit())
-        {
+        {ImGui.SameLine();
             Plugin.Cfg.Save();
         }
     }

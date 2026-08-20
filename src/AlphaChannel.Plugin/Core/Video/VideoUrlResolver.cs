@@ -332,6 +332,48 @@ internal sealed class VideoUrlResolver
         }
     }
 
+    public async Task<VideoSearchEntry?> GetVideoEntryAsync(
+    string url,
+    CancellationToken token)
+    {
+        try
+        {
+            var video =
+                await youtube.Videos
+                    .GetAsync(
+                        url,
+                        token)
+                    .ConfigureAwait(false);
+
+            var thumbnail =
+                video.Thumbnails
+                    .OrderByDescending(
+                        t => t.Resolution.Area)
+                    .FirstOrDefault();
+
+            return new VideoSearchEntry(
+                video.Title,
+                url,
+                video.Author.ChannelTitle,
+                video.Duration,
+                thumbnail?.Url,
+                video.Engagement.ViewCount,
+                video.UploadDate);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception exception)
+        {
+            AepLog.Warning(
+                $"[Video] Failed to fetch featured video metadata " +
+                $"for {url}: {exception.Message}");
+
+            return null;
+        }
+    }
+
     // YoutubeExplode's own search (scrapes YouTube's search results) - no API key needed, same
     // dependency already used for playback resolution and metadata enrichment above.
     public async Task<List<VideoSearchEntry>> SearchAsync(string query, int maxResults, CancellationToken token)

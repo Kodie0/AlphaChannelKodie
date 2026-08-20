@@ -52,12 +52,14 @@ namespace AlphaChannel.Plugin.Video
 		private bool _closed = true;
 		private Thread? _eventThread;
 
-		//Set by VideoEngine right after construction - the event loop below runs on its own
-		//background thread, so this is the only path an async mpv-side failure (a bad yt-dlp
-		//resolve, a codec/network error reported well after Play() already returned) has to reach
-		//VideoEngine.LastError. Fires from _eventThread, not the caller's own thread.
-		internal Action<string>? OnError;
-		private readonly Lock _snapshotLock = new();
+        //Set by VideoEngine right after construction - the event loop below runs on its own
+        //background thread, so this is the only path an async mpv-side failure (a bad yt-dlp
+        //resolve, a codec/network error reported well after Play() already returned) has to reach
+        //VideoEngine.LastError. Fires from _eventThread, not the caller's own thread.
+        internal Action<string>? OnError;
+
+        internal Action? OnFrameRendered;
+        private readonly Lock _snapshotLock = new();
 		private IntPtr _latestSnapshot;
 
 		public void Initialize(int width, int height, Texture2D? targetTexture, CancellationTokenSource cancelToken,
@@ -265,12 +267,15 @@ namespace AlphaChannel.Plugin.Video
 
 						Texture2D texture = _targetTexture;
 						int width = _width;
-						DxHandler.RunOnRenderThread(RenderKey, () =>
-						{
-							DxHandler.Device?.ImmediateContext.UpdateSubresource(texture, 0, null, snapshot, width * 4, 0);
-						});
-						return true;
-					}
+                        DxHandler.RunOnRenderThread(RenderKey, () =>
+                        {
+                            DxHandler.Device?.ImmediateContext.UpdateSubresource(texture, 0, null, snapshot, width * 4, 0);
+                        });
+
+                        OnFrameRendered?.Invoke();
+
+                        return true;
+                    }
 					else
 					{
 						AepLog.Warning($"[MPV] Error rendering frame: RC: {rc} Texture: {_targetTexture}");
